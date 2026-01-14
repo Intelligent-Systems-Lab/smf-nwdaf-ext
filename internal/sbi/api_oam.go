@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/free5gc/smf/internal/sbi/processor"
 )
 
 func (s *Server) getOAMRoutes() []Route {
@@ -28,6 +30,24 @@ func (s *Server) getOAMRoutes() []Route {
 			Pattern: "/user-plane-info/",
 			APIFunc: s.HTTPGetSMFUserPlaneInfo,
 		},
+		{
+			Name:    "Create NWDAF Subscription",
+			Method:  http.MethodPost,
+			Pattern: "/nwdaf-subscriptions",
+			APIFunc: s.HTTPCreateNwdafSubscription,
+		},
+		{
+			Name:    "Delete NWDAF Subscription",
+			Method:  http.MethodDelete,
+			Pattern: "/nwdaf-subscriptions/:subscriptionId",
+			APIFunc: s.HTTPDeleteNwdafSubscription,
+		},
+		{
+			Name:    "Get NWDAF Subscription",
+			Method:  http.MethodGet,
+			Pattern: "/nwdaf-subscriptions/:subscriptionId",
+			APIFunc: s.HTTPGetNwdafSubscription,
+		},
 	}
 }
 
@@ -39,4 +59,24 @@ func (s *Server) HTTPGetUEPDUSessionInfo(c *gin.Context) {
 
 func (s *Server) HTTPGetSMFUserPlaneInfo(c *gin.Context) {
 	s.Processor().HandleGetSMFUserPlaneInfo(c)
+}
+
+func (s *Server) HTTPCreateNwdafSubscription(c *gin.Context) {
+	var req processor.NwdafSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	s.Processor().HandleOAMCreateNwdafSubscription(c, &req)
+}
+
+func (s *Server) HTTPDeleteNwdafSubscription(c *gin.Context) {
+	subscriptionId := c.Params.ByName("subscriptionId")
+	s.Processor().HandleOAMDeleteNwdafSubscription(c, subscriptionId)
+}
+
+func (s *Server) HTTPGetNwdafSubscription(c *gin.Context) {
+	subscriptionId := c.Params.ByName("subscriptionId")
+	s.Processor().HandleOAMGetNwdafSubscription(c, subscriptionId)
 }
