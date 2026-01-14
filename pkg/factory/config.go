@@ -39,6 +39,7 @@ const (
 	SmfPdusessionResUriPrefix    = "/nsmf-pdusession/v1"
 	SmfOamUriPrefix              = "/nsmf-oam/v1"
 	SmfCallbackUriPrefix         = "/nsmf-callback"
+	NwdafCallbackUriPrefix       = "/nwdaf-callback"
 	NrfDiscUriPrefix             = "/nnrf-disc/v1"
 	UdmSdmUriPrefix              = "/nudm-sdm/v1"
 	PcfSmpolicycontrolUriPrefix  = "/npcf-smpolicycontrol/v1"
