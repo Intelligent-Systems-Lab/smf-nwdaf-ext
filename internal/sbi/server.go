@@ -72,6 +72,9 @@ func newRouter(s *Server) *gin.Engine {
 	smfCallbackGroup := router.Group(factory.SmfCallbackUriPrefix)
 	smfCallbackRoutes := s.getCallbackRoutes()
 	applyRoutes(smfCallbackGroup, smfCallbackRoutes)
+	nwdafCallbackGroup := router.Group(factory.NwdafCallbackUriPrefix)
+	nwdafCallbackRoutes := s.getNwdafCallbackRoutes()
+	applyRoutes(nwdafCallbackGroup, nwdafCallbackRoutes)
 
 	upiGroup := router.Group(factory.UpiUriPrefix)
 	upiRoutes := s.getUPIRoutes()
