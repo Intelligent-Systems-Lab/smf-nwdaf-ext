@@ -79,6 +79,8 @@ type SMFContext struct {
 	ChargingIDGenerator *idgenerator.IDGenerator
 
 	Ues *Ues
+
+	NwdafSubs *NwdafSubStore
 }
 
 func GenerateChargingID() int32 {
@@ -250,6 +252,7 @@ func InitSmfContext(config *factory.Config) {
 	TeidGenerator = idgenerator.NewGenerator(1, math.MaxUint32)
 
 	smfContext.Ues = InitSmfUeData()
+	smfContext.NwdafSubs = NewNwdafSubStore()
 }
 
 func InitSMFUERouting(routingConfig *factory.RoutingConfig) {
