@@ -1,7 +1,6 @@
+// File: NWDAF callback entry point for UE_COMMUNICATION subscriptions.
+// References TS 29.520 (Nnwdaf_EventsSubscription) and TS 23.288 (UE Communication analytics).
 package sbi
-
-// NWDAF callback handler:
-// - TS 29.520 callback notification (204) with request body as array
 
 import (
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	"github.com/free5gc/smf/internal/logger"
 )
 
+// getNwdafCallbackRoutes registers the callback endpoint for NWDAF notifications.
 func (s *Server) getNwdafCallbackRoutes() []Route {
 	return []Route{
 		{
@@ -24,9 +24,11 @@ func (s *Server) getNwdafCallbackRoutes() []Route {
 	}
 }
 
+// HTTPNwdafEventsNotification handles NWDAF notifications for UE_COMMUNICATION and returns 204 on success.
 func (s *Server) HTTPNwdafEventsNotification(c *gin.Context) {
 	var notifications []models.NnwdafEventsSubscriptionNotification
 
+	// Callback handler expects a JSON array per TS 29.520 contract.
 	reqBody, err := c.GetRawData()
 	if err != nil {
 		logger.SBILog.WithField("http_status", http.StatusBadRequest).

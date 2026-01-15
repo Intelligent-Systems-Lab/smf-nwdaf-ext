@@ -37,3 +37,18 @@ configuration:
 - 若需完全還原，移除：
   - `smf/pkg/factory/config.go` 中的 `NwdafSubscription` struct 與欄位
   - `smf/internal/sbi/processor/nwdaf_subscription.go` 內的預設解析與 retry
+
+## Commenting pass
+
+- 在 Task1-modified 與 Task1-new 檔案中新增簡明註解，以釐清 NWDAF UE_COMMUNICATION 流程（建立 → 通知 → 刪除）。
+- 文件化設定預設值、回呼路由、訂閱狀態索引，以及重試/退避意圖。
+- 已更新的檔案:
+  - `smf/pkg/factory/config.go`
+  - `smf/internal/sbi/server.go`
+  - `smf/internal/sbi/api_oam.go`
+  - `smf/internal/sbi/api_nwdaf_callback.go`
+  - `smf/internal/sbi/consumer/nwdaf_service.go`
+  - `smf/internal/sbi/consumer/consumer.go`
+  - `smf/internal/context/nwdaf_subscription.go`
+  - `smf/internal/context/context.go`
+  - `smf/internal/sbi/processor/nwdaf_subscription.go`

@@ -80,6 +80,7 @@ type SMFContext struct {
 
 	Ues *Ues
 
+	// NwdafSubs stores Task1 NWDAF UE_COMMUNICATION subscription state in memory.
 	NwdafSubs *NwdafSubStore
 }
 
@@ -252,6 +253,7 @@ func InitSmfContext(config *factory.Config) {
 	TeidGenerator = idgenerator.NewGenerator(1, math.MaxUint32)
 
 	smfContext.Ues = InitSmfUeData()
+	// Initialize NWDAF subscription store for OAM-triggered create/delete and callback lookup.
 	smfContext.NwdafSubs = NewNwdafSubStore()
 }
 

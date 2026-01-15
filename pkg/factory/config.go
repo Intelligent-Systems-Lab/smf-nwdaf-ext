@@ -39,11 +39,12 @@ const (
 	SmfPdusessionResUriPrefix    = "/nsmf-pdusession/v1"
 	SmfOamUriPrefix              = "/nsmf-oam/v1"
 	SmfCallbackUriPrefix         = "/nsmf-callback"
-	NwdafCallbackUriPrefix       = "/nwdaf-callback"
-	NrfDiscUriPrefix             = "/nnrf-disc/v1"
-	UdmSdmUriPrefix              = "/nudm-sdm/v1"
-	PcfSmpolicycontrolUriPrefix  = "/npcf-smpolicycontrol/v1"
-	UpiUriPrefix                 = "/upi/v1"
+	// NwdafCallbackUriPrefix is the callback path for UE_COMMUNICATION notifications (TS 29.520).
+	NwdafCallbackUriPrefix      = "/nwdaf-callback"
+	NrfDiscUriPrefix            = "/nnrf-disc/v1"
+	UdmSdmUriPrefix             = "/nudm-sdm/v1"
+	PcfSmpolicycontrolUriPrefix = "/npcf-smpolicycontrol/v1"
+	UpiUriPrefix                = "/upi/v1"
 )
 
 type Config struct {
@@ -106,7 +107,8 @@ type Configuration struct {
 	T3592                *TimerValue          `yaml:"t3592" valid:"required"`
 	NwInstFqdnEncoding   bool                 `yaml:"nwInstFqdnEncoding" valid:"type(bool),optional"`
 	RequestedUnit        int32                `yaml:"requestedUnit,omitempty" valid:"optional"`
-	NwdafSubscription    *NwdafSubscription   `yaml:"nwdafSubscription,omitempty" valid:"optional"`
+	// Optional defaults for NWDAF UE_COMMUNICATION subscription handling.
+	NwdafSubscription *NwdafSubscription `yaml:"nwdafSubscription,omitempty" valid:"optional"`
 }
 
 type Logger struct {
@@ -115,13 +117,16 @@ type Logger struct {
 	ReportCaller bool   `yaml:"reportCaller" valid:"type(bool)"`
 }
 
+// NwdafSubscription provides optional NWDAF UE_COMMUNICATION defaults from smfcfg.yaml.
 type NwdafSubscription struct {
-	DefaultNwdafApiRoot    string        `yaml:"defaultNwdafApiRoot,omitempty" valid:"optional"`
-	DefaultNotificationURI string        `yaml:"defaultNotificationURI,omitempty" valid:"optional"`
-	DefaultNotifCorrId     string        `yaml:"defaultNotifCorrId,omitempty" valid:"optional"`
-	DefaultRepPeriod       int32         `yaml:"defaultRepPeriod,omitempty" valid:"optional"`
-	RetryTimes             int           `yaml:"retryTimes,omitempty" valid:"optional"`
-	RetryInterval          time.Duration `yaml:"retryInterval,omitempty" valid:"type(time.Duration),optional"`
+	// Default values used when OAM request does not supply them.
+	DefaultNwdafApiRoot    string `yaml:"defaultNwdafApiRoot,omitempty" valid:"optional"`
+	DefaultNotificationURI string `yaml:"defaultNotificationURI,omitempty" valid:"optional"`
+	DefaultNotifCorrId     string `yaml:"defaultNotifCorrId,omitempty" valid:"optional"`
+	DefaultRepPeriod       int32  `yaml:"defaultRepPeriod,omitempty" valid:"optional"`
+	// Minimal retry/backoff controls for NWDAF create/delete calls.
+	RetryTimes    int           `yaml:"retryTimes,omitempty" valid:"optional"`
+	RetryInterval time.Duration `yaml:"retryInterval,omitempty" valid:"type(time.Duration),optional"`
 }
 
 func (c *Configuration) validate() (bool, error) {

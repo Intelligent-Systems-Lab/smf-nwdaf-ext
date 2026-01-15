@@ -24,8 +24,8 @@ type Consumer struct {
 	*npcfService
 	*nudmService
 	*nnrfService
-	*nbsfService // BSF service for PCF binding discovery
-	*nwdafService
+	*nbsfService  // BSF service for PCF binding discovery
+	*nwdafService // NWDAF EventsSubscription client for UE_COMMUNICATION.
 }
 
 func NewConsumer(smf app.App) (*Consumer, error) {

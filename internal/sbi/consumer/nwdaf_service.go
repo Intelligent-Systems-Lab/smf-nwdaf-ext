@@ -1,8 +1,6 @@
+// File: NWDAF EventsSubscription client for Task1 UE_COMMUNICATION subscription flow.
+// References TS 29.520 (Nnwdaf_EventsSubscription) and TS 23.288 (UE Communication analytics).
 package consumer
-
-// NWDAF EventsSubscription client:
-// - TS 29.520 CreateNWDAFEventsSubscription (201 + Location)
-// - TS 29.520 DeleteNWDAFEventsSubscription (204)
 
 import (
 	"context"
@@ -23,11 +21,13 @@ type nwdafService struct {
 	EventsSubscriptionClients map[string]*EventsSubscription.APIClient
 }
 
+// getEventsSubscriptionClient returns a cached client for the given NWDAF apiRoot.
 func (s *nwdafService) getEventsSubscriptionClient(apiRoot string) *EventsSubscription.APIClient {
 	if apiRoot == "" {
 		return nil
 	}
 
+	// Normalize to /nnwdaf-eventssubscription/v1 to align with TS 29.520 base path.
 	basePath := normalizeNwdafBasePath(apiRoot)
 	s.mu.RLock()
 	client, ok := s.EventsSubscriptionClients[basePath]
@@ -48,6 +48,7 @@ func (s *nwdafService) getEventsSubscriptionClient(apiRoot string) *EventsSubscr
 	return client
 }
 
+// SendCreateNwdafEventsSubscription invokes CreateNWDAFEventsSubscription and returns Location header.
 func (s *nwdafService) SendCreateNwdafEventsSubscription(
 	ctx context.Context,
 	apiRoot string,
@@ -69,6 +70,7 @@ func (s *nwdafService) SendCreateNwdafEventsSubscription(
 	return response.Location, &response.NnwdafEventsSubscription, nil
 }
 
+// SendDeleteNwdafEventsSubscription invokes DeleteNWDAFEventsSubscription by subscriptionId.
 func (s *nwdafService) SendDeleteNwdafEventsSubscription(
 	ctx context.Context,
 	apiRoot string,
@@ -86,6 +88,7 @@ func (s *nwdafService) SendDeleteNwdafEventsSubscription(
 	return err
 }
 
+// normalizeNwdafBasePath ensures apiRoot points to /nnwdaf-eventssubscription/v1.
 func normalizeNwdafBasePath(apiRoot string) string {
 	trimmed := strings.TrimRight(apiRoot, "/")
 	if strings.Contains(trimmed, "/nnwdaf-eventssubscription/") {

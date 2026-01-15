@@ -1,9 +1,6 @@
+// File: Task1 NWDAF subscription processor for UE_COMMUNICATION.
+// References TS 29.520 (Create/Notify/Delete) and TS 23.288 (UE Communication analytics).
 package processor
-
-// NWDAF subscription processor:
-// - TS 29.520 CreateNWDAFEventsSubscription (201 + Location)
-// - TS 29.520 callback notification (204)
-// - TS 29.520 DeleteNWDAFEventsSubscription (204)
 
 import (
 	"context"
@@ -35,11 +32,13 @@ type NwdafSubscriptionRequest struct {
 	RetryIntervalMs *int                         `json:"retryIntervalMs,omitempty"`
 }
 
+// HandleOAMCreateNwdafSubscription triggers CreateNWDAFEventsSubscription using OAM or config defaults.
 func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafSubscriptionRequest) {
 	if req == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "empty request"})
 		return
 	}
+	// OAM request drives subscription creation; config defaults apply when fields are omitted.
 	if req.Supi == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "supi is required"})
 		return
@@ -60,6 +59,7 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 
 	// TODO(V1): Only UE_COMMUNICATION with single SUPI is supported to keep the first patch minimal.
 	if req.EvtReq != nil && req.RepPeriod != nil && *req.RepPeriod > 0 {
+		// Override repPeriod when provided explicitly by OAM.
 		req.EvtReq.RepPeriod = *req.RepPeriod
 		if req.EvtReq.NotifMethod == "" {
 			req.EvtReq.NotifMethod = models.SmfEventExposureNotificationMethod_PERIODIC
@@ -79,6 +79,7 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 		EvtReq:          req.EvtReq,
 	}
 	if subscription.EvtReq == nil && resolved.repPeriod > 0 {
+		// Apply config default reporting period when OAM does not specify evtReq.
 		subscription.EvtReq = &models.ReportingInformation{
 			NotifMethod: models.SmfEventExposureNotificationMethod_PERIODIC,
 			RepPeriod:   resolved.repPeriod,
@@ -128,6 +129,7 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 	c.JSON(http.StatusCreated, state)
 }
 
+// HandleOAMDeleteNwdafSubscription triggers DeleteNWDAFEventsSubscription by subscriptionId.
 func (p *Processor) HandleOAMDeleteNwdafSubscription(c *gin.Context, subscriptionId string) {
 	if subscriptionId == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "subscriptionId is required"})
@@ -168,6 +170,7 @@ func (p *Processor) HandleOAMDeleteNwdafSubscription(c *gin.Context, subscriptio
 	c.Status(http.StatusNoContent)
 }
 
+// HandleOAMGetNwdafSubscription returns local subscription state for OAM debugging.
 func (p *Processor) HandleOAMGetNwdafSubscription(c *gin.Context, subscriptionId string) {
 	if subscriptionId == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "subscriptionId is required"})
@@ -183,12 +186,14 @@ func (p *Processor) HandleOAMGetNwdafSubscription(c *gin.Context, subscriptionId
 	c.JSON(http.StatusOK, state)
 }
 
+// HandleNwdafNotification handles NWDAF notification array and responds with 204 on success.
 func (p *Processor) HandleNwdafNotification(
 	c *gin.Context,
 	notifications []models.NnwdafEventsSubscriptionNotification,
 ) {
 	for _, notif := range notifications {
 		supi := ""
+		// Try exact match using subscriptionId + notifCorrId; fallback to subscriptionId only.
 		if strings.TrimSpace(notif.SubscriptionId) == "" {
 			logger.SBILog.WithFields(logrus.Fields{
 				"notif_corr_id": notif.NotifCorrId,
@@ -231,7 +236,9 @@ func (p *Processor) HandleNwdafNotification(
 
 var nwdafLocationRegexp = regexp.MustCompile(`/subscriptions/([^/]+)$`)
 
+// extractNwdafSubscriptionId parses subscriptionId from the Location header.
 func extractNwdafSubscriptionId(location string) (string, error) {
+	// Parse subscriptionId from Location header (URL path preferred, regex as fallback).
 	if strings.TrimSpace(location) == "" {
 		return "", fmt.Errorf("empty Location header")
 	}
@@ -251,6 +258,7 @@ func extractNwdafSubscriptionId(location string) (string, error) {
 	return "", fmt.Errorf("cannot parse subscriptionId from Location")
 }
 
+// nwdafResolvedParams holds resolved runtime values for a subscription request.
 type nwdafResolvedParams struct {
 	apiRoot         string
 	notificationURI string
@@ -260,11 +268,13 @@ type nwdafResolvedParams struct {
 	retryInterval   time.Duration
 }
 
+// resolveNwdafDefaults merges OAM request values with smfcfg defaults and derived fallbacks.
 func resolveNwdafDefaults(
 	cfg *factory.Config,
 	smfCtx *smf_context.SMFContext,
 	req *NwdafSubscriptionRequest,
 ) nwdafResolvedParams {
+	// Resolve values in order: OAM request > config defaults > derived fallback.
 	resolved := nwdafResolvedParams{}
 	if req != nil {
 		resolved.apiRoot = strings.TrimSpace(req.NwdafApiRoot)
@@ -304,6 +314,7 @@ func resolveNwdafDefaults(
 	}
 
 	if resolved.notificationURI == "" && smfCtx != nil {
+		// Derive callback URI from SMF SBI binding as a last resort.
 		resolved.notificationURI = fmt.Sprintf(
 			"%s://%s:%d%s",
 			smfCtx.URIScheme,
@@ -313,17 +324,20 @@ func resolveNwdafDefaults(
 		)
 	}
 	if resolved.notifCorrId == "" {
+		// Fallback correlation ID for traceability.
 		resolved.notifCorrId = uuid.NewString()
 	}
 	return resolved
 }
 
+// createNwdafSubscriptionWithRetry wraps CreateNWDAFEventsSubscription with minimal retry/backoff.
 func (p *Processor) createNwdafSubscriptionWithRetry(
 	ctx context.Context,
 	supi string,
 	resolved nwdafResolvedParams,
 	subscription *models.NnwdafEventsSubscription,
 ) (string, error) {
+	// Minimal retry/backoff to improve robustness when NWDAF is transiently unavailable.
 	attempts := resolved.retryTimes + 1
 	if attempts < 1 {
 		attempts = 1
@@ -348,12 +362,14 @@ func (p *Processor) createNwdafSubscriptionWithRetry(
 	return "", lastErr
 }
 
+// deleteNwdafSubscriptionWithRetry wraps DeleteNWDAFEventsSubscription with minimal retry/backoff.
 func (p *Processor) deleteNwdafSubscriptionWithRetry(
 	ctx context.Context,
 	state *smf_context.NwdafSubscriptionState,
 	subscriptionId string,
 	resolved nwdafResolvedParams,
 ) error {
+	// Mirror create retry/backoff behavior for delete.
 	attempts := resolved.retryTimes + 1
 	if attempts < 1 {
 		attempts = 1

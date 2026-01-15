@@ -72,6 +72,7 @@ func newRouter(s *Server) *gin.Engine {
 	smfCallbackGroup := router.Group(factory.SmfCallbackUriPrefix)
 	smfCallbackRoutes := s.getCallbackRoutes()
 	applyRoutes(smfCallbackGroup, smfCallbackRoutes)
+	// NWDAF callback endpoint for UE_COMMUNICATION notifications.
 	nwdafCallbackGroup := router.Group(factory.NwdafCallbackUriPrefix)
 	nwdafCallbackRoutes := s.getNwdafCallbackRoutes()
 	applyRoutes(nwdafCallbackGroup, nwdafCallbackRoutes)

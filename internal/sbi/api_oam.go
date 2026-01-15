@@ -64,8 +64,10 @@ func (s *Server) HTTPGetSMFUserPlaneInfo(c *gin.Context) {
 	s.Processor().HandleGetSMFUserPlaneInfo(c)
 }
 
+// HTTPCreateNwdafSubscription creates an NWDAF UE_COMMUNICATION subscription via OAM trigger.
 func (s *Server) HTTPCreateNwdafSubscription(c *gin.Context) {
 	var req processor.NwdafSubscriptionRequest
+	// OAM handler for NWDAF subscription create; payload fields are optional and may be defaulted.
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -74,12 +76,16 @@ func (s *Server) HTTPCreateNwdafSubscription(c *gin.Context) {
 	s.Processor().HandleOAMCreateNwdafSubscription(c, &req)
 }
 
+// HTTPDeleteNwdafSubscription deletes a local and remote NWDAF subscription by subscriptionId.
 func (s *Server) HTTPDeleteNwdafSubscription(c *gin.Context) {
+	// OAM handler for NWDAF subscription delete by subscriptionId.
 	subscriptionId := c.Params.ByName("subscriptionId")
 	s.Processor().HandleOAMDeleteNwdafSubscription(c, subscriptionId)
 }
 
+// HTTPGetNwdafSubscription returns local NWDAF subscription state for inspection.
 func (s *Server) HTTPGetNwdafSubscription(c *gin.Context) {
+	// OAM handler for querying local NWDAF subscription state.
 	subscriptionId := c.Params.ByName("subscriptionId")
 	s.Processor().HandleOAMGetNwdafSubscription(c, subscriptionId)
 }
