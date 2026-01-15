@@ -1,5 +1,9 @@
 package consumer
 
+// NWDAF EventsSubscription client:
+// - TS 29.520 CreateNWDAFEventsSubscription (201 + Location)
+// - TS 29.520 DeleteNWDAFEventsSubscription (204)
+
 import (
 	"context"
 	"fmt"
