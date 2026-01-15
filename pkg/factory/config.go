@@ -106,12 +106,22 @@ type Configuration struct {
 	T3592                *TimerValue          `yaml:"t3592" valid:"required"`
 	NwInstFqdnEncoding   bool                 `yaml:"nwInstFqdnEncoding" valid:"type(bool),optional"`
 	RequestedUnit        int32                `yaml:"requestedUnit,omitempty" valid:"optional"`
+	NwdafSubscription    *NwdafSubscription   `yaml:"nwdafSubscription,omitempty" valid:"optional"`
 }
 
 type Logger struct {
 	Enable       bool   `yaml:"enable" valid:"type(bool)"`
 	Level        string `yaml:"level" valid:"required,in(trace|debug|info|warn|error|fatal|panic)"`
 	ReportCaller bool   `yaml:"reportCaller" valid:"type(bool)"`
+}
+
+type NwdafSubscription struct {
+	DefaultNwdafApiRoot    string        `yaml:"defaultNwdafApiRoot,omitempty" valid:"optional"`
+	DefaultNotificationURI string        `yaml:"defaultNotificationURI,omitempty" valid:"optional"`
+	DefaultNotifCorrId     string        `yaml:"defaultNotifCorrId,omitempty" valid:"optional"`
+	DefaultRepPeriod       int32         `yaml:"defaultRepPeriod,omitempty" valid:"optional"`
+	RetryTimes             int           `yaml:"retryTimes,omitempty" valid:"optional"`
+	RetryInterval          time.Duration `yaml:"retryInterval,omitempty" valid:"type(time.Duration),optional"`
 }
 
 func (c *Configuration) validate() (bool, error) {

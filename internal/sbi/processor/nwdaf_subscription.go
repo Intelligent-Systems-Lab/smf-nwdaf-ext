@@ -12,13 +12,16 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
 	"github.com/free5gc/openapi/models"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/internal/logger"
+	"github.com/free5gc/smf/pkg/factory"
 )
 
 type NwdafSubscriptionRequest struct {
@@ -27,6 +30,9 @@ type NwdafSubscriptionRequest struct {
 	NotificationURI string                       `json:"notificationURI"`
 	NotifCorrId     string                       `json:"notifCorrId"`
 	EvtReq          *models.ReportingInformation `json:"evtReq,omitempty"`
+	RepPeriod       *int32                       `json:"repPeriod,omitempty"`
+	RetryTimes      *int                         `json:"retryTimes,omitempty"`
+	RetryIntervalMs *int                         `json:"retryIntervalMs,omitempty"`
 }
 
 func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafSubscriptionRequest) {
@@ -34,8 +40,14 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 		c.JSON(http.StatusBadRequest, gin.H{"error": "empty request"})
 		return
 	}
-	if req.Supi == "" || req.NwdafApiRoot == "" || req.NotificationURI == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "supi, nwdafApiRoot, notificationURI are required"})
+	if req.Supi == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "supi is required"})
+		return
+	}
+
+	resolved := resolveNwdafDefaults(p.Config(), p.Context(), req)
+	if resolved.apiRoot == "" || resolved.notificationURI == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "nwdafApiRoot and notificationURI are required"})
 		return
 	}
 
@@ -43,32 +55,44 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 		logger.SBILog.WithFields(logrus.Fields{
 			logger.FieldSupi: req.Supi,
 			"http_status":    http.StatusOK,
-		}).Warn("NWDAF subscription request missing notifCorrId; callback lookup will fallback to subscriptionId")
+		}).Warn("NWDAF subscription request missing notifCorrId; using default or generated value")
 	}
 
 	// TODO(V1): Only UE_COMMUNICATION with single SUPI is supported to keep the first patch minimal.
+	if req.EvtReq != nil && req.RepPeriod != nil && *req.RepPeriod > 0 {
+		req.EvtReq.RepPeriod = *req.RepPeriod
+		if req.EvtReq.NotifMethod == "" {
+			req.EvtReq.NotifMethod = models.SmfEventExposureNotificationMethod_PERIODIC
+		}
+	}
 	subscription := models.NnwdafEventsSubscription{
-		EventSubscriptions: []models.EventSubscription{
+		EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{
 			{
 				Event: models.NwdafEvent_UE_COMMUNICATION,
-				TgtUe: &models.TargetUeInfo{
+				TgtUe: &models.TargetUeInformation{
 					Supis: []string{req.Supi},
 				},
 			},
 		},
-		NotificationURI: req.NotificationURI,
-		NotifCorrId:     req.NotifCorrId,
+		NotificationURI: resolved.notificationURI,
+		NotifCorrId:     resolved.notifCorrId,
 		EvtReq:          req.EvtReq,
+	}
+	if subscription.EvtReq == nil && resolved.repPeriod > 0 {
+		subscription.EvtReq = &models.ReportingInformation{
+			NotifMethod: models.SmfEventExposureNotificationMethod_PERIODIC,
+			RepPeriod:   resolved.repPeriod,
+		}
 	}
 
 	ctx := context.Background()
-	location, _, err := p.Consumer().SendCreateNwdafEventsSubscription(ctx, req.NwdafApiRoot, &subscription)
+	location, err := p.createNwdafSubscriptionWithRetry(
+		ctx,
+		req.Supi,
+		resolved,
+		&subscription,
+	)
 	if err != nil {
-		logger.SBILog.WithFields(logrus.Fields{
-			logger.FieldSupi: req.Supi,
-			"notif_corr_id":  req.NotifCorrId,
-			"http_status":    http.StatusBadGateway,
-		}).Errorf("NWDAF create subscription failed: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -77,7 +101,7 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 	if parseErr != nil {
 		logger.SBILog.WithFields(logrus.Fields{
 			logger.FieldSupi: req.Supi,
-			"notif_corr_id":  req.NotifCorrId,
+			"notif_corr_id":  resolved.notifCorrId,
 			"http_status":    http.StatusBadGateway,
 		}).Errorf("NWDAF create returned invalid Location header: %s (%v)", location, parseErr)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid Location header"})
@@ -87,16 +111,16 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 	state := &smf_context.NwdafSubscriptionState{
 		Supi:            req.Supi,
 		SubscriptionId:  subscriptionId,
-		NotifCorrId:     req.NotifCorrId,
-		NotificationURI: req.NotificationURI,
-		NwdafApiRoot:    req.NwdafApiRoot,
+		NotifCorrId:     resolved.notifCorrId,
+		NotificationURI: resolved.notificationURI,
+		NwdafApiRoot:    resolved.apiRoot,
 	}
 	p.Context().NwdafSubs.Put(state)
 
 	logger.SBILog.WithFields(logrus.Fields{
 		logger.FieldSupi:  req.Supi,
 		"subscription_id": subscriptionId,
-		"notif_corr_id":   req.NotifCorrId,
+		"notif_corr_id":   resolved.notifCorrId,
 		"http_status":     http.StatusCreated,
 	}).Info("NWDAF subscription created")
 
@@ -121,13 +145,13 @@ func (p *Processor) HandleOAMDeleteNwdafSubscription(c *gin.Context, subscriptio
 	}
 
 	ctx := context.Background()
-	if err := p.Consumer().SendDeleteNwdafEventsSubscription(ctx, state.NwdafApiRoot, subscriptionId); err != nil {
-		logger.SBILog.WithFields(logrus.Fields{
-			logger.FieldSupi:  state.Supi,
-			"subscription_id": subscriptionId,
-			"notif_corr_id":   state.NotifCorrId,
-			"http_status":     http.StatusBadGateway,
-		}).Errorf("NWDAF delete subscription failed: %v", err)
+	resolved := resolveNwdafDefaults(p.Config(), p.Context(), &NwdafSubscriptionRequest{})
+	if err := p.deleteNwdafSubscriptionWithRetry(
+		ctx,
+		state,
+		subscriptionId,
+		resolved,
+	); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
@@ -225,4 +249,131 @@ func extractNwdafSubscriptionId(location string) (string, error) {
 		return match[1], nil
 	}
 	return "", fmt.Errorf("cannot parse subscriptionId from Location")
+}
+
+type nwdafResolvedParams struct {
+	apiRoot         string
+	notificationURI string
+	notifCorrId     string
+	repPeriod       int32
+	retryTimes      int
+	retryInterval   time.Duration
+}
+
+func resolveNwdafDefaults(
+	cfg *factory.Config,
+	smfCtx *smf_context.SMFContext,
+	req *NwdafSubscriptionRequest,
+) nwdafResolvedParams {
+	resolved := nwdafResolvedParams{}
+	if req != nil {
+		resolved.apiRoot = strings.TrimSpace(req.NwdafApiRoot)
+		resolved.notificationURI = strings.TrimSpace(req.NotificationURI)
+		resolved.notifCorrId = strings.TrimSpace(req.NotifCorrId)
+		if req.RepPeriod != nil && *req.RepPeriod > 0 {
+			resolved.repPeriod = *req.RepPeriod
+		}
+		if req.RetryTimes != nil && *req.RetryTimes > 0 {
+			resolved.retryTimes = *req.RetryTimes
+		}
+		if req.RetryIntervalMs != nil && *req.RetryIntervalMs > 0 {
+			resolved.retryInterval = time.Duration(*req.RetryIntervalMs) * time.Millisecond
+		}
+	}
+
+	if cfg != nil && cfg.Configuration != nil && cfg.Configuration.NwdafSubscription != nil {
+		conf := cfg.Configuration.NwdafSubscription
+		if resolved.apiRoot == "" {
+			resolved.apiRoot = strings.TrimSpace(conf.DefaultNwdafApiRoot)
+		}
+		if resolved.notificationURI == "" {
+			resolved.notificationURI = strings.TrimSpace(conf.DefaultNotificationURI)
+		}
+		if resolved.notifCorrId == "" {
+			resolved.notifCorrId = strings.TrimSpace(conf.DefaultNotifCorrId)
+		}
+		if resolved.repPeriod == 0 && conf.DefaultRepPeriod > 0 {
+			resolved.repPeriod = conf.DefaultRepPeriod
+		}
+		if resolved.retryTimes == 0 && conf.RetryTimes > 0 {
+			resolved.retryTimes = conf.RetryTimes
+		}
+		if resolved.retryInterval == 0 && conf.RetryInterval > 0 {
+			resolved.retryInterval = conf.RetryInterval
+		}
+	}
+
+	if resolved.notificationURI == "" && smfCtx != nil {
+		resolved.notificationURI = fmt.Sprintf(
+			"%s://%s:%d%s",
+			smfCtx.URIScheme,
+			smfCtx.RegisterIPv4,
+			smfCtx.SBIPort,
+			factory.NwdafCallbackUriPrefix,
+		)
+	}
+	if resolved.notifCorrId == "" {
+		resolved.notifCorrId = uuid.NewString()
+	}
+	return resolved
+}
+
+func (p *Processor) createNwdafSubscriptionWithRetry(
+	ctx context.Context,
+	supi string,
+	resolved nwdafResolvedParams,
+	subscription *models.NnwdafEventsSubscription,
+) (string, error) {
+	attempts := resolved.retryTimes + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	var location string
+	for attempt := 1; attempt <= attempts; attempt++ {
+		location, _, lastErr = p.Consumer().SendCreateNwdafEventsSubscription(ctx, resolved.apiRoot, subscription)
+		if lastErr == nil {
+			return location, nil
+		}
+		logger.SBILog.WithFields(logrus.Fields{
+			logger.FieldSupi: supi,
+			"notif_corr_id":  resolved.notifCorrId,
+			"attempt":        attempt,
+			"http_status":    http.StatusBadGateway,
+		}).Warnf("NWDAF create subscription failed: %v", lastErr)
+		if attempt < attempts && resolved.retryInterval > 0 {
+			time.Sleep(resolved.retryInterval)
+		}
+	}
+	return "", lastErr
+}
+
+func (p *Processor) deleteNwdafSubscriptionWithRetry(
+	ctx context.Context,
+	state *smf_context.NwdafSubscriptionState,
+	subscriptionId string,
+	resolved nwdafResolvedParams,
+) error {
+	attempts := resolved.retryTimes + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		lastErr = p.Consumer().SendDeleteNwdafEventsSubscription(ctx, state.NwdafApiRoot, subscriptionId)
+		if lastErr == nil {
+			return nil
+		}
+		logger.SBILog.WithFields(logrus.Fields{
+			logger.FieldSupi:  state.Supi,
+			"subscription_id": subscriptionId,
+			"notif_corr_id":   state.NotifCorrId,
+			"attempt":         attempt,
+			"http_status":     http.StatusBadGateway,
+		}).Warnf("NWDAF delete subscription failed: %v", lastErr)
+		if attempt < attempts && resolved.retryInterval > 0 {
+			time.Sleep(resolved.retryInterval)
+		}
+	}
+	return lastErr
 }

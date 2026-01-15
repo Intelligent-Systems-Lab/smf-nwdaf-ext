@@ -80,7 +80,7 @@ func (s *nwdafService) SendDeleteNwdafEventsSubscription(
 	}
 
 	request := &EventsSubscription.DeleteNWDAFEventsSubscriptionRequest{
-		SubscriptionId: subscriptionId,
+		SubscriptionId: &subscriptionId,
 	}
 	_, err := client.IndividualNWDAFEventsSubscriptionDocumentApi.DeleteNWDAFEventsSubscription(ctx, request)
 	return err

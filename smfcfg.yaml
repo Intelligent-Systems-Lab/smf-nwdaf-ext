@@ -107,6 +107,16 @@ configuration:
   urrPeriod: 10 # default usage report period in seconds
   urrThreshold: 1000 # default usage report threshold in bytes
   requestedUnit: 1000
+
+  # Optional: NWDAF UE_COMMUNICATION subscription defaults for OAM-triggered flow.
+  nwdafSubscription:
+    defaultNwdafApiRoot: http://127.0.0.1:9000
+    defaultNotificationURI: http://127.0.0.2:8000/nwdaf-callback
+    defaultNotifCorrId: corr-001
+    defaultRepPeriod: 60
+    retryTimes: 2
+    retryInterval: 1s
+    
 logger: # log output setting
   enable: true # true or false
   level: debug # how detailed to output, value: trace, debug, info, warn, error, fatal, panic
