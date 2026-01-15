@@ -1,5 +1,8 @@
 package sbi
 
+// NWDAF callback handler:
+// - TS 29.520 callback notification (204) with request body as array
+
 import (
 	"net/http"
 
@@ -26,13 +29,21 @@ func (s *Server) HTTPNwdafEventsNotification(c *gin.Context) {
 
 	reqBody, err := c.GetRawData()
 	if err != nil {
-		logger.SBILog.Errorln("NWDAF callback GetRawData failed")
+		logger.SBILog.WithField("http_status", http.StatusBadRequest).
+			Errorln("NWDAF callback GetRawData failed")
 		c.Status(http.StatusBadRequest)
 		return
 	}
 
 	if err = openapi.Deserialize(&notifications, reqBody, c.ContentType()); err != nil {
-		logger.SBILog.Errorf("NWDAF callback deserialize failed: %v", err)
+		logger.SBILog.WithField("http_status", http.StatusBadRequest).
+			Errorf("NWDAF callback deserialize failed: %v", err)
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	if len(notifications) == 0 {
+		logger.SBILog.WithField("http_status", http.StatusBadRequest).
+			Warn("NWDAF callback received empty notifications array")
 		c.Status(http.StatusBadRequest)
 		return
 	}
