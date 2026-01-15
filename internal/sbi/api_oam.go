@@ -30,18 +30,21 @@ func (s *Server) getOAMRoutes() []Route {
 			Pattern: "/user-plane-info/",
 			APIFunc: s.HTTPGetSMFUserPlaneInfo,
 		},
+		// NWDAF subscription OAM endpoints for manual trigger.
 		{
 			Name:    "Create NWDAF Subscription",
 			Method:  http.MethodPost,
 			Pattern: "/nwdaf-subscriptions",
 			APIFunc: s.HTTPCreateNwdafSubscription,
 		},
+		// Delete by subscriptionId.
 		{
 			Name:    "Delete NWDAF Subscription",
 			Method:  http.MethodDelete,
 			Pattern: "/nwdaf-subscriptions/:subscriptionId",
 			APIFunc: s.HTTPDeleteNwdafSubscription,
 		},
+		// Get by subscriptionId.
 		{
 			Name:    "Get NWDAF Subscription",
 			Method:  http.MethodGet,
