@@ -1,9 +1,17 @@
 package processor
 
+// NWDAF subscription processor:
+// - TS 29.520 CreateNWDAFEventsSubscription (201 + Location)
+// - TS 29.520 callback notification (204)
+// - TS 29.520 DeleteNWDAFEventsSubscription (204)
+
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
@@ -26,12 +34,19 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 		c.JSON(http.StatusBadRequest, gin.H{"error": "empty request"})
 		return
 	}
-	if req.Supi == "" || req.NwdafApiRoot == "" || req.NotificationURI == "" || req.NotifCorrId == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "supi, nwdafApiRoot, notificationURI, notifCorrId are required"})
+	if req.Supi == "" || req.NwdafApiRoot == "" || req.NotificationURI == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "supi, nwdafApiRoot, notificationURI are required"})
 		return
 	}
 
-	// TODO(V1): Only UE_COMMUNICATION with single SUPI is supported for now.
+	if req.NotifCorrId == "" {
+		logger.SBILog.WithFields(logrus.Fields{
+			logger.FieldSupi: req.Supi,
+			"http_status":    http.StatusOK,
+		}).Warn("NWDAF subscription request missing notifCorrId; callback lookup will fallback to subscriptionId")
+	}
+
+	// TODO(V1): Only UE_COMMUNICATION with single SUPI is supported to keep the first patch minimal.
 	subscription := models.NnwdafEventsSubscription{
 		EventSubscriptions: []models.EventSubscription{
 			{
@@ -58,13 +73,13 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 		return
 	}
 
-	subscriptionId := extractNwdafSubscriptionId(location)
-	if subscriptionId == "" {
+	subscriptionId, parseErr := extractNwdafSubscriptionId(location)
+	if parseErr != nil {
 		logger.SBILog.WithFields(logrus.Fields{
 			logger.FieldSupi: req.Supi,
 			"notif_corr_id":  req.NotifCorrId,
 			"http_status":    http.StatusBadGateway,
-		}).Errorf("NWDAF create returned invalid Location header: %s", location)
+		}).Errorf("NWDAF create returned invalid Location header: %s (%v)", location, parseErr)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid Location header"})
 		return
 	}
@@ -97,6 +112,10 @@ func (p *Processor) HandleOAMDeleteNwdafSubscription(c *gin.Context, subscriptio
 
 	state, ok := p.Context().NwdafSubs.GetBySubscriptionId(subscriptionId)
 	if !ok {
+		logger.SBILog.WithFields(logrus.Fields{
+			"subscription_id": subscriptionId,
+			"http_status":     http.StatusNotFound,
+		}).Warn("NWDAF subscription not found in local state")
 		c.JSON(http.StatusNotFound, gin.H{"error": "subscription not found"})
 		return
 	}
@@ -146,8 +165,33 @@ func (p *Processor) HandleNwdafNotification(
 ) {
 	for _, notif := range notifications {
 		supi := ""
-		if state, ok := p.Context().NwdafSubs.GetBySubCorr(notif.SubscriptionId, notif.NotifCorrId); ok {
-			supi = state.Supi
+		if strings.TrimSpace(notif.SubscriptionId) == "" {
+			logger.SBILog.WithFields(logrus.Fields{
+				"notif_corr_id": notif.NotifCorrId,
+				"http_status":   http.StatusNoContent,
+			}).Warn("NWDAF notification missing subscriptionId")
+		}
+		if notif.NotifCorrId != "" {
+			if state, ok := p.Context().NwdafSubs.GetBySubCorr(notif.SubscriptionId, notif.NotifCorrId); ok {
+				supi = state.Supi
+			}
+		} else {
+			logger.SBILog.WithFields(logrus.Fields{
+				"subscription_id": notif.SubscriptionId,
+				"http_status":     http.StatusNoContent,
+			}).Warn("NWDAF notification missing notifCorrId; fallback to subscriptionId")
+		}
+		if supi == "" {
+			if state, ok := p.Context().NwdafSubs.GetBySubscriptionId(notif.SubscriptionId); ok {
+				supi = state.Supi
+			}
+		}
+		if supi == "" {
+			logger.SBILog.WithFields(logrus.Fields{
+				"subscription_id": notif.SubscriptionId,
+				"notif_corr_id":   notif.NotifCorrId,
+				"http_status":     http.StatusNoContent,
+			}).Warn("NWDAF notification does not match local subscription state")
 		}
 
 		logger.SBILog.WithFields(logrus.Fields{
@@ -163,10 +207,22 @@ func (p *Processor) HandleNwdafNotification(
 
 var nwdafLocationRegexp = regexp.MustCompile(`/subscriptions/([^/]+)$`)
 
-func extractNwdafSubscriptionId(location string) string {
+func extractNwdafSubscriptionId(location string) (string, error) {
+	if strings.TrimSpace(location) == "" {
+		return "", fmt.Errorf("empty Location header")
+	}
+
+	if parsed, err := url.Parse(location); err == nil && parsed.Path != "" {
+		path := strings.TrimRight(parsed.Path, "/")
+		parts := strings.Split(path, "/")
+		if len(parts) > 0 && parts[len(parts)-1] != "" {
+			return parts[len(parts)-1], nil
+		}
+	}
+
 	match := nwdafLocationRegexp.FindStringSubmatch(location)
 	if len(match) > 1 {
-		return match[1]
+		return match[1], nil
 	}
-	return ""
+	return "", fmt.Errorf("cannot parse subscriptionId from Location")
 }
