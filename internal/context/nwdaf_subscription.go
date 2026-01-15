@@ -1,5 +1,8 @@
 package context
 
+// NWDAF subscription store:
+// - Tracks TS 29.520 subscription state (Location -> subscriptionId) for Create/Delete/Notify.
+
 import (
 	"fmt"
 	"sync"
@@ -20,10 +23,13 @@ type NwdafSubscriptionState struct {
 }
 
 type NwdafSubStore struct {
-	mu               sync.RWMutex
-	byKey            map[NwdafSubKey]*NwdafSubscriptionState
+	mu sync.RWMutex
+	// Invariant: byKey is the source of truth keyed by (supi, subscriptionId, notifCorrId).
+	byKey map[NwdafSubKey]*NwdafSubscriptionState
+	// bySubscriptionId enables Delete/Get by subscriptionId when notifCorrId is unavailable.
 	bySubscriptionId map[string]NwdafSubKey
-	bySubCorr        map[string]NwdafSubKey
+	// bySubCorr enables callback lookup by (subscriptionId, notifCorrId); notifCorrId may be empty.
+	bySubCorr map[string]NwdafSubKey
 }
 
 func NewNwdafSubStore() *NwdafSubStore {
