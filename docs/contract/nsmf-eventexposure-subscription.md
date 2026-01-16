@@ -6,24 +6,6 @@
 *   **請求 (NWDAF → SMF):** `POST /nsmf-event-exposure/v1/subscriptions`
 ```json
 {
-  "supi": "imsi-123456789012345",
-  "notifId": "NWDAF-SUB-001",
-  "notifUri": "https://nwdaf.example.com/callback/usage",
-  "eventSubs": [
-    {
-      "event": "UPF_EVENT"
-    }
-  ]
-}
-```
-*   **回應 (SMF → NWDAF):** `201 Created`
-    *   **Header:** `Location: {apiRoot}/nsmf-event-exposure/v1/subscriptions/sub123`
-    *   **Payload:** 回傳完整的 `NsmfEventExposure` 物件（含 SMF 分配的 `subId`）。
-
-#### **B. 事件通知 (Notification)**
-*   **請求 (SMF → NWDAF):** `POST {notifUri}`
-```json
-{
   "notifId": "nwdaf-uecom-0001",
   "notifUri": "http://nwdaf.example.com/nsmf-ee/v1/notify",
   "supi": "imsi-208930000000001",
@@ -44,6 +26,25 @@
     }
   ]
 }
+```
+*   **回應 (SMF → NWDAF):** `201 Created`
+    *   **Header:** `Location: {apiRoot}/nsmf-event-exposure/v1/subscriptions/sub123`
+    *   **Payload:** 回傳完整的 `NsmfEventExposure` 物件（含 SMF 分配的 `subId`）。
+
+#### **B. 事件通知 (Notification)**
+*   **請求 (SMF → NWDAF):** `POST {notifUri}`
+```json
+{
+  "notifId": "NWDAF-SUB-001",
+  "eventNotifs": [
+    {
+      "event": "UPF_EVENT",
+      "timeStamp": "2026-01-16T00:00:00Z",
+      "supi": "imsi-208930000000001"
+    }
+  ]
+}
+
 ```
 *   **回應 (NWDAF → SMF):** `204 No Content`（確認收到通知）。
 
