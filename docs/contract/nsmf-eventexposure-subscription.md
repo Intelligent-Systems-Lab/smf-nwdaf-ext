@@ -53,9 +53,9 @@ Content-Type: application/json
 
 {
   "subId": "sub-123",
-  "supi": "supi-1234567890",
-  "notifId": "nwdaf-correlation-id-001",
-  "notifUri": "https://nwdaf.example.com/notify/upf-data",
+  "supi": "imsi-208930000000001",
+  "notifId": "nwdaf-uecom-0001",
+  "notifUri": "http://nwdaf.example.com/nsmf-ee/v1/notify",
   "eventSubs": [
     {
       "event": "UPF_EVENT"
@@ -133,16 +133,15 @@ HTTP/2 204 No Content
     *   `eventSubs[].event`: **(必填)** 設為 `"UPF_EVENT"`。
     *   `nfId`: **(條件必填)** 當 `event` 為 `UPF_EVENT` 時，此欄位為必填，代表建立訂閱的 NF 實例 ID。
         *   Schema: `properties/nfId`
-    *   **UE 識別 (三擇一)**:
-        *   `supi`: 用於 Single UE。
-        *   `gpsi`: 用於 Single UE。
-        *   `groupId` / `anyUeInd`: 用於群組或任意 UE。
+    *   **UE/PDU Session target 規則**:
+        *   若本訂閱不是針對特定 PDU session：`supi` / `gpsi` / `groupId` / `anyUeInd=true` 四擇一（且只能選一）。
+        *   若本訂閱是針對特定 PDU session：改用 `pduSeId`。
 
 *   **可 Stub / Hardcode 的欄位:**
     *   `notifId`: 可產生任意唯一字串 (e.g., `"uuid-notif-001"`).
     *   `notifUri`: 可固定為測試接收端點 (e.g., `"http://localhost:8080/callback"`).
     *   `nfId`: 可固定為 NWDAF 的 UUID (e.g., `"35368538-4089-4b2a-9a99-923304240000"`).
-    *   `eventSubs[].upfEvents`: 此內容透傳給 UPF，若僅測試 SMF 介面流程，內容可先 Stub 為空物件或依據 29.564 的最小結構。
+    *   `eventSubs[].upfEvents`: 此內容透傳給 UPF，`upfEvents` **不可** stub 成空陣列或空物件；一旦提供 `upfEvents`，其 items 必須符合 TS 29.564 的 `UpfEvent`（至少 `type` 必填）。。
 
 ---
 
