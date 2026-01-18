@@ -116,6 +116,14 @@ configuration:
     defaultRepPeriod: 60
     retryTimes: 2
     retryInterval: 1s
+
+  # Optional: SMF->UPF Nupf_EventExposure defaults for UPF data usage subscription.
+  nupfEventExposure:
+    upfApiRoot: http://127.0.0.1:8805
+    nwdafUpfNotifyUri: http://nwdaf.example.com/nupf-ee/v1/notify
+    repPeriod: 10
+    retryTimes: 2
+    retryInterval: 1s
     
 logger: # log output setting
   enable: true # true or false

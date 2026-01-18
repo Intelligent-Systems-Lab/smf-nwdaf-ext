@@ -10,6 +10,13 @@ type NsmfEventExposureSubState struct {
 	NotifId   string
 	NotifUri  string
 	EventSubs []NsmfEventExposureEventSubState
+	UpfSubId  string
+	// UpfLocation stores the Location header returned by the UPF subscription create.
+	UpfLocation string
+	// UpfApiRoot stores the selected UPF apiRoot used for this subscription.
+	UpfApiRoot string
+	// SelectedUpfName records the chosen UPF name or identifier from SMContext.
+	SelectedUpfName string
 }
 
 // NsmfEventExposureEventSubState mirrors the incoming event subscription for later UPF cascading.

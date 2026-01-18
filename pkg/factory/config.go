@@ -109,6 +109,8 @@ type Configuration struct {
 	RequestedUnit        int32                `yaml:"requestedUnit,omitempty" valid:"optional"`
 	// Optional defaults for NWDAF UE_COMMUNICATION subscription handling.
 	NwdafSubscription *NwdafSubscription `yaml:"nwdafSubscription,omitempty" valid:"optional"`
+	// Optional defaults for UPF Event Exposure subscription handling.
+	NupfEventExposure *NupfEventExposure `yaml:"nupfEventExposure,omitempty" valid:"optional"`
 }
 
 type Logger struct {
@@ -125,6 +127,19 @@ type NwdafSubscription struct {
 	DefaultNotifCorrId     string `yaml:"defaultNotifCorrId,omitempty" valid:"optional"`
 	DefaultRepPeriod       int32  `yaml:"defaultRepPeriod,omitempty" valid:"optional"`
 	// Minimal retry/backoff controls for NWDAF create/delete calls.
+	RetryTimes    int           `yaml:"retryTimes,omitempty" valid:"optional"`
+	RetryInterval time.Duration `yaml:"retryInterval,omitempty" valid:"type(time.Duration),optional"`
+}
+
+// NupfEventExposure provides defaults for SMF->UPF Nupf_EventExposure subscription.
+type NupfEventExposure struct {
+	// UPF apiRoot (e.g., http://127.0.0.1:8805).
+	UpfApiRoot string `yaml:"upfApiRoot,omitempty" valid:"optional"`
+	// NWDAF notify URI for UPF direct notifications.
+	NwdafUpfNotifyUri string `yaml:"nwdafUpfNotifyUri,omitempty" valid:"optional"`
+	// Reporting period for periodic reporting.
+	RepPeriod int32 `yaml:"repPeriod,omitempty" valid:"optional"`
+	// Minimal retry/backoff controls for UPF create calls.
 	RetryTimes    int           `yaml:"retryTimes,omitempty" valid:"optional"`
 	RetryInterval time.Duration `yaml:"retryInterval,omitempty" valid:"type(time.Duration),optional"`
 }

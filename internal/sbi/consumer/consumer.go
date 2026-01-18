@@ -26,6 +26,7 @@ type Consumer struct {
 	*nnrfService
 	*nbsfService  // BSF service for PCF binding discovery
 	*nwdafService // NWDAF EventsSubscription client for UE_COMMUNICATION.
+	*nupfEventExposureService
 }
 
 func NewConsumer(smf app.App) (*Consumer, error) {
@@ -72,6 +73,10 @@ func NewConsumer(smf app.App) (*Consumer, error) {
 	c.nwdafService = &nwdafService{
 		consumer:                  c,
 		EventsSubscriptionClients: make(map[string]*EventsSubscription.APIClient),
+	}
+
+	c.nupfEventExposureService = &nupfEventExposureService{
+		consumer: c,
 	}
 
 	return c, nil

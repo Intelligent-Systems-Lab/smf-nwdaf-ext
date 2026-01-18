@@ -12,9 +12,11 @@
 package sbi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -23,6 +25,7 @@ import (
 	"github.com/free5gc/openapi/models"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/internal/logger"
+	"github.com/free5gc/smf/pkg/factory"
 	"github.com/free5gc/util/metrics/sbi"
 )
 
@@ -31,6 +34,10 @@ type nsmfEventExposureRequest struct {
 	NotifId   string                          `json:"notifId"`
 	NotifUri  string                          `json:"notifUri"`
 	EventSubs []nsmfEventExposureEventSubItem `json:"eventSubs"`
+	Dnn       string                          `json:"dnn,omitempty"`
+	Snssai    *models.Snssai                  `json:"snssai,omitempty"`
+	PduSeId   int32                           `json:"pduSeId,omitempty"`
+	RepPeriod int32                           `json:"repPeriod,omitempty"`
 }
 
 type nsmfEventExposureEventSubItem struct {
@@ -42,6 +49,34 @@ type nsmfEventExposureUpfEvent struct {
 	Type                     string   `json:"type"`
 	MeasurementTypes         []string `json:"measurementTypes"`
 	GranularityOfMeasurement string   `json:"granularityOfMeasurement,omitempty"`
+}
+
+type upfEventExposureCreateRequest struct {
+	Subscription upfEventExposureSubscription `json:"subscription"`
+}
+
+type upfEventExposureSubscription struct {
+	NfId              string                  `json:"nfId"`
+	UeIpAddress       string                  `json:"ueIpAddress"`
+	EventList         []upfEventExposureEvent `json:"eventList"`
+	EventNotifyUri    string                  `json:"eventNotifyUri"`
+	NotifyCorrelation string                  `json:"notifyCorrelationId"`
+	EventReporting    upfEventExposureMode    `json:"eventReportingMode"`
+}
+
+type upfEventExposureMode struct {
+	Trigger   string `json:"trigger"`
+	RepPeriod int32  `json:"repPeriod"`
+}
+
+type upfEventExposureEvent struct {
+	Type                     string   `json:"type"`
+	MeasurementTypes         []string `json:"measurementTypes"`
+	GranularityOfMeasurement string   `json:"granularityOfMeasurement,omitempty"`
+}
+
+type upfEventExposureConsumer interface {
+	SendCreateNupfEventExposureSubscription(ctx context.Context, apiRoot string, payload any) (string, int, error)
 }
 
 func (s *Server) getEventExposureRoutes() []Route {
@@ -101,6 +136,13 @@ func (s *Server) HTTPCreateIndividualSubcription(c *gin.Context) {
 		return
 	}
 
+	ueIP, selectedUpf, upfApiRoot, problemDetails := resolveUpfTarget(&req)
+	if problemDetails != nil {
+		c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(problemDetails.Status)))
+		c.JSON(int(problemDetails.Status), problemDetails)
+		return
+	}
+
 	subId := uuid.New().String()
 	eventSubsState := make([]smf_context.NsmfEventExposureEventSubState, 0, len(req.EventSubs))
 	for _, sub := range req.EventSubs {
@@ -118,12 +160,68 @@ func (s *Server) HTTPCreateIndividualSubcription(c *gin.Context) {
 		})
 	}
 
+	upfEvents := buildUpfEventList(req.EventSubs)
+	repPeriod := resolveUpfRepPeriod(&req)
+	upfNotifyUri := resolveNwdafUpfNotifyUri()
+	if upfNotifyUri == "" {
+		upfProblemDetails := openapi.ProblemDetailsSystemFailure("nwdafUpfNotifyUri not configured")
+		c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(upfProblemDetails.Status)))
+		c.JSON(int(upfProblemDetails.Status), upfProblemDetails)
+		return
+	}
+	if len(upfEvents) == 0 {
+		upfProblemDetails := openapi.ProblemDetailsMalformedReqSyntax("upfEvents missing USER_DATA_USAGE_MEASURES")
+		c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(upfProblemDetails.Status)))
+		c.JSON(int(upfProblemDetails.Status), upfProblemDetails)
+		return
+	}
+
+	upfCreateReq := upfEventExposureCreateRequest{
+		Subscription: upfEventExposureSubscription{
+			NfId:        smf_context.GetSelf().NfInstanceID,
+			UeIpAddress: ueIP,
+			EventList:   upfEvents,
+			// Correlation propagation: notifId -> notifyCorrelationId for direct UPF->NWDAF notifications.
+			NotifyCorrelation: req.NotifId,
+			// UPF notifications must go directly to NWDAF (not SMF) per UPF_EVENT design.
+			EventNotifyUri: upfNotifyUri,
+			EventReporting: upfEventExposureMode{
+				Trigger:   "PERIODIC",
+				RepPeriod: repPeriod,
+			},
+		},
+	}
+
+	upfLocation, status, err := createUpfSubscriptionWithRetry(
+		context.Background(),
+		s.Consumer(),
+		upfApiRoot,
+		upfCreateReq,
+	)
+	if err != nil {
+		logger.SBILog.WithFields(map[string]interface{}{
+			logger.FieldSupi: req.Supi,
+			"nsmf_sub_id":    subId,
+			"selected_upf":   selectedUpf,
+			"http_status":    status,
+		}).Infof("Nsmf_EventExposure cascade UPF subscribe failed: %v", err)
+		upfProblemDetails := openapi.ProblemDetailsSystemFailure(err.Error())
+		c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(upfProblemDetails.Status)))
+		c.JSON(int(upfProblemDetails.Status), upfProblemDetails)
+		return
+	}
+
+	upfSubId := extractUpfSubscriptionId(upfLocation)
 	state := &smf_context.NsmfEventExposureSubState{
-		NsmfSubId: subId,
-		Supi:      req.Supi,
-		NotifId:   req.NotifId,
-		NotifUri:  req.NotifUri,
-		EventSubs: eventSubsState,
+		NsmfSubId:       subId,
+		Supi:            req.Supi,
+		NotifId:         req.NotifId,
+		NotifUri:        req.NotifUri,
+		EventSubs:       eventSubsState,
+		UpfSubId:        upfSubId,
+		UpfLocation:     upfLocation,
+		UpfApiRoot:      upfApiRoot,
+		SelectedUpfName: selectedUpf,
 	}
 	smf_context.GetSelf().NsmfEventExposureSubs.Put(state)
 
@@ -158,6 +256,14 @@ func (s *Server) HTTPCreateIndividualSubcription(c *gin.Context) {
 		"nsmf_sub_id":    subId,
 		"http_status":    http.StatusCreated,
 	}).Info("Nsmf_EventExposure subscription created")
+
+	logger.SBILog.WithFields(map[string]interface{}{
+		logger.FieldSupi: req.Supi,
+		"nsmf_sub_id":    subId,
+		"selected_upf":   selectedUpf,
+		"upf_location":   upfLocation,
+		"http_status":    status,
+	}).Info("Nsmf_EventExposure cascaded UPF subscription created")
 
 	c.Header("Location", location)
 	c.JSON(http.StatusCreated, response)
@@ -213,6 +319,9 @@ func validateNsmfEventExposureRequest(req *nsmfEventExposureRequest) *models.Pro
 	if strings.TrimSpace(req.Supi) == "" {
 		return openapi.ProblemDetailsMalformedReqSyntax("supi is required")
 	}
+	if strings.TrimSpace(req.NotifId) == "" {
+		return openapi.ProblemDetailsMalformedReqSyntax("notifId is required")
+	}
 	if len(req.EventSubs) == 0 {
 		return openapi.ProblemDetailsMalformedReqSyntax("eventSubs is required")
 	}
@@ -258,4 +367,130 @@ func validateNsmfEventExposureRequest(req *nsmfEventExposureRequest) *models.Pro
 	}
 
 	return nil
+}
+
+func resolveUpfTarget(req *nsmfEventExposureRequest) (string, string, string, *models.ProblemDetails) {
+	if req == nil {
+		return "", "", "", openapi.ProblemDetailsMalformedReqSyntax("empty request")
+	}
+
+	var smContext *smf_context.SMContext
+	if req.PduSeId > 0 {
+		smContext = smf_context.GetSMContextById(req.Supi, req.PduSeId)
+	} else {
+		smContext = smf_context.GetSMContextBySupi(req.Supi, req.Dnn, req.Snssai)
+	}
+
+	if smContext == nil {
+		return "", "", "", openapi.ProblemDetailsDataNotFound("SMContext not found")
+	}
+	if smContext.PDUAddress == nil {
+		return "", "", "", openapi.ProblemDetailsDataNotFound("UE IP not allocated")
+	}
+	if smContext.SelectedUPF == nil {
+		return "", "", "", openapi.ProblemDetailsDataNotFound("Selected UPF not found")
+	}
+
+	upfApiRoot := ""
+	if factory.SmfConfig != nil && factory.SmfConfig.Configuration != nil &&
+		factory.SmfConfig.Configuration.NupfEventExposure != nil {
+		upfApiRoot = strings.TrimSpace(factory.SmfConfig.Configuration.NupfEventExposure.UpfApiRoot)
+	}
+	if upfApiRoot == "" {
+		return "", "", "", openapi.ProblemDetailsDataNotFound("UPF apiRoot not configured")
+	}
+
+	selectedUpf := smContext.SelectedUPF.Name
+	return smContext.PDUAddress.String(), selectedUpf, upfApiRoot, nil
+}
+
+func buildUpfEventList(eventSubs []nsmfEventExposureEventSubItem) []upfEventExposureEvent {
+	events := make([]upfEventExposureEvent, 0)
+	for _, sub := range eventSubs {
+		if strings.TrimSpace(sub.Event) != "UPF_EVENT" {
+			continue
+		}
+		for _, upfEvent := range sub.UpfEvents {
+			if strings.TrimSpace(upfEvent.Type) != "USER_DATA_USAGE_MEASURES" {
+				continue
+			}
+			granularity := upfEvent.GranularityOfMeasurement
+			if granularity == "" {
+				granularity = "PER_SESSION"
+			}
+			events = append(events, upfEventExposureEvent{
+				Type:                     upfEvent.Type,
+				MeasurementTypes:         append([]string(nil), upfEvent.MeasurementTypes...),
+				GranularityOfMeasurement: granularity,
+			})
+		}
+	}
+	return events
+}
+
+func resolveUpfRepPeriod(req *nsmfEventExposureRequest) int32 {
+	if req != nil && req.RepPeriod > 0 {
+		return req.RepPeriod
+	}
+	if factory.SmfConfig != nil && factory.SmfConfig.Configuration != nil &&
+		factory.SmfConfig.Configuration.NupfEventExposure != nil {
+		if factory.SmfConfig.Configuration.NupfEventExposure.RepPeriod > 0 {
+			return factory.SmfConfig.Configuration.NupfEventExposure.RepPeriod
+		}
+	}
+	return 10
+}
+
+func resolveNwdafUpfNotifyUri() string {
+	if factory.SmfConfig != nil && factory.SmfConfig.Configuration != nil &&
+		factory.SmfConfig.Configuration.NupfEventExposure != nil {
+		return strings.TrimSpace(factory.SmfConfig.Configuration.NupfEventExposure.NwdafUpfNotifyUri)
+	}
+	return ""
+}
+
+func createUpfSubscriptionWithRetry(
+	ctx context.Context,
+	consumer upfEventExposureConsumer,
+	apiRoot string,
+	payload upfEventExposureCreateRequest,
+) (string, int, error) {
+	if consumer == nil {
+		return "", http.StatusInternalServerError, fmt.Errorf("UPF consumer not initialized")
+	}
+	retryTimes := 0
+	retryInterval := time.Duration(0)
+	if factory.SmfConfig != nil && factory.SmfConfig.Configuration != nil &&
+		factory.SmfConfig.Configuration.NupfEventExposure != nil {
+		retryTimes = factory.SmfConfig.Configuration.NupfEventExposure.RetryTimes
+		retryInterval = factory.SmfConfig.Configuration.NupfEventExposure.RetryInterval
+	}
+
+	attempts := retryTimes + 1
+	var lastErr error
+	var lastStatus int
+	for i := 0; i < attempts; i++ {
+		location, status, err := consumer.SendCreateNupfEventExposureSubscription(ctx, apiRoot, payload)
+		if err == nil {
+			return location, status, nil
+		}
+		lastErr = err
+		lastStatus = status
+		if i < attempts-1 && retryInterval > 0 {
+			time.Sleep(retryInterval)
+		}
+	}
+	return "", lastStatus, lastErr
+}
+
+func extractUpfSubscriptionId(location string) string {
+	location = strings.TrimSpace(location)
+	if location == "" {
+		return ""
+	}
+	parts := strings.Split(strings.TrimRight(location, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
 }
