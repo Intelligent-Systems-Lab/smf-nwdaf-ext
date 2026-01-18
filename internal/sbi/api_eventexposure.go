@@ -34,7 +34,7 @@ type nsmfEventExposureRequest struct {
 }
 
 type nsmfEventExposureEventSubItem struct {
-	Event     string                     `json:"event"`
+	Event     string                      `json:"event"`
 	UpfEvents []nsmfEventExposureUpfEvent `json:"upfEvents"`
 }
 
