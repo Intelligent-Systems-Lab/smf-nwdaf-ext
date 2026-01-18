@@ -35,7 +35,7 @@ const (
 	SmfMetricsDefaultScheme      = "https"
 	SmfMetricsDefaultNamespace   = "free5gc"
 	SmfDefaultNrfUri             = "https://127.0.0.10:8000"
-	SmfEventExposureResUriPrefix = "/nsmf_event-exposure/v1"
+	SmfEventExposureResUriPrefix = "/nsmf-event-exposure/v1"
 	SmfPdusessionResUriPrefix    = "/nsmf-pdusession/v1"
 	SmfOamUriPrefix              = "/nsmf-oam/v1"
 	SmfCallbackUriPrefix         = "/nsmf-callback"

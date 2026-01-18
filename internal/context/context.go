@@ -82,6 +82,8 @@ type SMFContext struct {
 
 	// NwdafSubs stores Task1 NWDAF UE_COMMUNICATION subscription state in memory.
 	NwdafSubs *NwdafSubStore
+	// NsmfEventExposureSubs stores Task2 Nsmf_EventExposure subscriptions in memory.
+	NsmfEventExposureSubs *NsmfEventExposureSubStore
 }
 
 func GenerateChargingID() int32 {
@@ -255,6 +257,8 @@ func InitSmfContext(config *factory.Config) {
 	smfContext.Ues = InitSmfUeData()
 	// Initialize NWDAF subscription store for OAM-triggered create/delete and callback lookup.
 	smfContext.NwdafSubs = NewNwdafSubStore()
+	// Initialize Nsmf_EventExposure subscription store for in-memory tracking.
+	smfContext.NsmfEventExposureSubs = NewNsmfEventExposureSubStore()
 }
 
 func InitSMFUERouting(routingConfig *factory.RoutingConfig) {
