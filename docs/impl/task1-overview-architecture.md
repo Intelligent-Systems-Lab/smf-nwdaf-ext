@@ -23,7 +23,7 @@
   參考：`docs/spec/TS29520_Nnwdaf_EventsSubscription.yaml` paths `/subscriptions/{subscriptionId}` → delete。
 
 Contract 黃金 payload 以 `docs/contract/nnwdaf-uecomm-subscription.md` 為準：  
-- Create body 需包含 `eventSubscriptions[].event=UE_COMMUNICATION`、`tgtUe.supis`、`notificationURI`、`notifCorrId`、`evtReq`  
+- Create body 需包含 `eventSubscriptions[].event=UE_COMMUNICATION`、`tgtUe.supis`、`notificationURI`、`evtReq`；`notifCorrId` 為選填  
   參考：`docs/contract/nnwdaf-uecomm-subscription.md`「建立訂閱 (Create Subscription) / Request Body」。  
 - Notify body 為 `array`，元素包含 `subscriptionId`、`notifCorrId`、`eventNotifications[]`、`ueComms[]`  
   參考：`docs/contract/nnwdaf-uecomm-subscription.md`「事件通知 (Notify) / Request Body」。
@@ -51,12 +51,11 @@ Contract 黃金 payload 以 `docs/contract/nnwdaf-uecomm-subscription.md` 為準
 
 4) 訂閱狀態儲存  
    - 檔案：`internal/context/nwdaf_subscription.go`  
-   - key：`(supi, subscriptionId, notifCorrId)`  
-   - index：`subscriptionId` 與 `subscriptionId+notifCorrId`  
+   - key：`subscriptionId`（主要）  
+   - `notifCorrId` 若存在僅作為記錄用途  
    參考：`docs/impl/smf-task1-first-patch.md`「訂閱狀態（In-memory map）」。
 
 5) NWDAF callback route  
    - 入口：`/nwdaf-callback`  
    - Handler：`internal/sbi/api_nwdaf_callback.go`  
    參考：`docs/impl/smf-task1-first-patch.md`「NWDAF 通知 callback」。
-

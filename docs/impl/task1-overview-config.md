@@ -34,6 +34,7 @@ configuration:
 - `defaultNotifCorrId`  
   - notification correlation id 預設值  
   - OAM request 有帶 `notifCorrId` 時，以 OAM 為準  
+  - 若未提供，SMF 仍可運作並以 `subscriptionId` 作為主要關聯  
   - 參考：`docs/impl/smf-task1-third-patch.md`
 
 - `defaultRepPeriod`  
@@ -50,4 +51,3 @@ configuration:
 
 設定僅影響「預設值」，不修改 contract 黃金 payload 的欄位與結構。  
 建立/通知 payload 必須遵循：`docs/contract/nnwdaf-uecomm-subscription.md`。
-

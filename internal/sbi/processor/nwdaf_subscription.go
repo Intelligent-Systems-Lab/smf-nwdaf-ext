@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
 	"github.com/free5gc/openapi/models"
@@ -50,13 +49,6 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 		return
 	}
 
-	if req.NotifCorrId == "" {
-		logger.SBILog.WithFields(logrus.Fields{
-			logger.FieldSupi: req.Supi,
-			"http_status":    http.StatusOK,
-		}).Warn("NWDAF subscription request missing notifCorrId; using default or generated value")
-	}
-
 	// TODO(V1): Only UE_COMMUNICATION with single SUPI is supported to keep the first patch minimal.
 	if req.EvtReq != nil && req.RepPeriod != nil && *req.RepPeriod > 0 {
 		// Override repPeriod when provided explicitly by OAM.
@@ -75,8 +67,11 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 			},
 		},
 		NotificationURI: resolved.notificationURI,
-		NotifCorrId:     resolved.notifCorrId,
 		EvtReq:          req.EvtReq,
+	}
+	if resolved.notifCorrId != "" {
+		// notifCorrId is optional; include only when explicitly provided.
+		subscription.NotifCorrId = resolved.notifCorrId
 	}
 	if subscription.EvtReq == nil && resolved.repPeriod > 0 {
 		// Apply config default reporting period when OAM does not specify evtReq.
@@ -100,11 +95,15 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 
 	subscriptionId, parseErr := extractNwdafSubscriptionId(location)
 	if parseErr != nil {
-		logger.SBILog.WithFields(logrus.Fields{
+		logFields := logrus.Fields{
 			logger.FieldSupi: req.Supi,
-			"notif_corr_id":  resolved.notifCorrId,
 			"http_status":    http.StatusBadGateway,
-		}).Errorf("NWDAF create returned invalid Location header: %s (%v)", location, parseErr)
+		}
+		if resolved.notifCorrId != "" {
+			logFields["notif_corr_id"] = resolved.notifCorrId
+		}
+		logger.SBILog.WithFields(logFields).
+			Errorf("NWDAF create returned invalid Location header: %s (%v)", location, parseErr)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid Location header"})
 		return
 	}
@@ -118,12 +117,15 @@ func (p *Processor) HandleOAMCreateNwdafSubscription(c *gin.Context, req *NwdafS
 	}
 	p.Context().NwdafSubs.Put(state)
 
-	logger.SBILog.WithFields(logrus.Fields{
+	logFields := logrus.Fields{
 		logger.FieldSupi:  req.Supi,
 		"subscription_id": subscriptionId,
-		"notif_corr_id":   resolved.notifCorrId,
 		"http_status":     http.StatusCreated,
-	}).Info("NWDAF subscription created")
+	}
+	if resolved.notifCorrId != "" {
+		logFields["notif_corr_id"] = resolved.notifCorrId
+	}
+	logger.SBILog.WithFields(logFields).Info("NWDAF subscription created")
 
 	c.Header("Location", location)
 	c.JSON(http.StatusCreated, state)
@@ -160,12 +162,15 @@ func (p *Processor) HandleOAMDeleteNwdafSubscription(c *gin.Context, subscriptio
 
 	p.Context().NwdafSubs.DeleteBySubscriptionId(subscriptionId)
 
-	logger.SBILog.WithFields(logrus.Fields{
+	logFields := logrus.Fields{
 		logger.FieldSupi:  state.Supi,
 		"subscription_id": subscriptionId,
-		"notif_corr_id":   state.NotifCorrId,
 		"http_status":     http.StatusNoContent,
-	}).Info("NWDAF subscription deleted")
+	}
+	if state.NotifCorrId != "" {
+		logFields["notif_corr_id"] = state.NotifCorrId
+	}
+	logger.SBILog.WithFields(logFields).Info("NWDAF subscription deleted")
 
 	c.Status(http.StatusNoContent)
 }
@@ -192,43 +197,27 @@ func (p *Processor) HandleNwdafNotification(
 	notifications []models.NnwdafEventsSubscriptionNotification,
 ) {
 	for _, notif := range notifications {
-		supi := ""
-		// Try exact match using subscriptionId + notifCorrId; fallback to subscriptionId only.
 		if strings.TrimSpace(notif.SubscriptionId) == "" {
-			logger.SBILog.WithFields(logrus.Fields{
-				"notif_corr_id": notif.NotifCorrId,
-				"http_status":   http.StatusNoContent,
-			}).Warn("NWDAF notification missing subscriptionId")
-		}
-		if notif.NotifCorrId != "" {
-			if state, ok := p.Context().NwdafSubs.GetBySubCorr(notif.SubscriptionId, notif.NotifCorrId); ok {
-				supi = state.Supi
-			}
-		} else {
-			logger.SBILog.WithFields(logrus.Fields{
-				"subscription_id": notif.SubscriptionId,
-				"http_status":     http.StatusNoContent,
-			}).Warn("NWDAF notification missing notifCorrId; fallback to subscriptionId")
-		}
-		if supi == "" {
-			if state, ok := p.Context().NwdafSubs.GetBySubscriptionId(notif.SubscriptionId); ok {
-				supi = state.Supi
-			}
-		}
-		if supi == "" {
-			logger.SBILog.WithFields(logrus.Fields{
-				"subscription_id": notif.SubscriptionId,
-				"notif_corr_id":   notif.NotifCorrId,
-				"http_status":     http.StatusNoContent,
-			}).Warn("NWDAF notification does not match local subscription state")
+			logger.SBILog.WithField("http_status", http.StatusBadRequest).
+				Warn("NWDAF notification missing subscriptionId")
+			c.Status(http.StatusBadRequest)
+			return
 		}
 
-		logger.SBILog.WithFields(logrus.Fields{
+		// Task1 correlates notifications by subscriptionId; notifCorrId is optional.
+		supi := ""
+		if state, ok := p.Context().NwdafSubs.GetBySubscriptionId(notif.SubscriptionId); ok {
+			supi = state.Supi
+		}
+		logFields := logrus.Fields{
 			logger.FieldSupi:  supi,
 			"subscription_id": notif.SubscriptionId,
-			"notif_corr_id":   notif.NotifCorrId,
 			"http_status":     http.StatusNoContent,
-		}).Info("NWDAF notification received")
+		}
+		if notif.NotifCorrId != "" {
+			logFields["notif_corr_id"] = notif.NotifCorrId
+		}
+		logger.SBILog.WithFields(logFields).Info("NWDAF notification received")
 	}
 
 	c.Status(http.StatusNoContent)
@@ -279,6 +268,7 @@ func resolveNwdafDefaults(
 	if req != nil {
 		resolved.apiRoot = strings.TrimSpace(req.NwdafApiRoot)
 		resolved.notificationURI = strings.TrimSpace(req.NotificationURI)
+		// notifCorrId is optional; only propagate when explicitly provided.
 		resolved.notifCorrId = strings.TrimSpace(req.NotifCorrId)
 		if req.RepPeriod != nil && *req.RepPeriod > 0 {
 			resolved.repPeriod = *req.RepPeriod
@@ -324,8 +314,7 @@ func resolveNwdafDefaults(
 		)
 	}
 	if resolved.notifCorrId == "" {
-		// Fallback correlation ID for traceability.
-		resolved.notifCorrId = uuid.NewString()
+		// notifCorrId is optional; leave empty unless provided by OAM or config.
 	}
 	return resolved
 }
@@ -349,12 +338,15 @@ func (p *Processor) createNwdafSubscriptionWithRetry(
 		if lastErr == nil {
 			return location, nil
 		}
-		logger.SBILog.WithFields(logrus.Fields{
+		logFields := logrus.Fields{
 			logger.FieldSupi: supi,
-			"notif_corr_id":  resolved.notifCorrId,
 			"attempt":        attempt,
 			"http_status":    http.StatusBadGateway,
-		}).Warnf("NWDAF create subscription failed: %v", lastErr)
+		}
+		if resolved.notifCorrId != "" {
+			logFields["notif_corr_id"] = resolved.notifCorrId
+		}
+		logger.SBILog.WithFields(logFields).Warnf("NWDAF create subscription failed: %v", lastErr)
 		if attempt < attempts && resolved.retryInterval > 0 {
 			time.Sleep(resolved.retryInterval)
 		}
@@ -380,13 +372,16 @@ func (p *Processor) deleteNwdafSubscriptionWithRetry(
 		if lastErr == nil {
 			return nil
 		}
-		logger.SBILog.WithFields(logrus.Fields{
+		logFields := logrus.Fields{
 			logger.FieldSupi:  state.Supi,
 			"subscription_id": subscriptionId,
-			"notif_corr_id":   state.NotifCorrId,
 			"attempt":         attempt,
 			"http_status":     http.StatusBadGateway,
-		}).Warnf("NWDAF delete subscription failed: %v", lastErr)
+		}
+		if state.NotifCorrId != "" {
+			logFields["notif_corr_id"] = state.NotifCorrId
+		}
+		logger.SBILog.WithFields(logFields).Warnf("NWDAF delete subscription failed: %v", lastErr)
 		if attempt < attempts && resolved.retryInterval > 0 {
 			time.Sleep(resolved.retryInterval)
 		}

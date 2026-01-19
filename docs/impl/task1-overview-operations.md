@@ -10,7 +10,7 @@
 Endpoint（OAM）：  
 `POST /nsmf-oam/v1/nwdaf-subscriptions`
 
-Request body（請保持欄位與大小寫一致）：  
+Request body（請保持欄位與大小寫一致；`notifCorrId` 選填）：  
 參考：`docs/contract/nnwdaf-uecomm-subscription.md`「建立訂閱 / Request Body」。
 
 ```json
@@ -66,6 +66,7 @@ Request body（必須是 array）：
 預期行為：  
 - SMF 回 `204 No Content`  
   參考：`docs/spec/TS29520_Nnwdaf_EventsSubscription.yaml` callbacks `myNotification` → `204`。
+- `notifCorrId` 若缺失，SMF 仍可依 `subscriptionId` 完成關聯。
 
 ### 3) OAM 觸發刪除訂閱（SMF → NWDAF）
 
@@ -99,4 +100,3 @@ Endpoint（OAM）：
 3) Delete 回 `404`  
    - SMF 本地 state 查不到 `subscriptionId`  
    - 參考：`docs/impl/smf-task1-second-patch.md`「DeleteNWDAFEventsSubscription」。
-

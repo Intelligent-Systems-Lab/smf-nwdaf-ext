@@ -40,6 +40,10 @@ go test ./internal/sbi -run TestHTTPNwdafEventsNotification
    - 可能原因：Location header 格式與 `.../subscriptions/{subscriptionId}` 不一致  
    - 參考：`docs/spec/TS29520_Nnwdaf_EventsSubscription.yaml` → `201 Location`
 
+3) **notifCorrId 缺失**  
+   - Task1 已允許缺失，系統會以 `subscriptionId` 進行關聯  
+   - 若仍看到錯誤，請確認 `subscriptionId` 是否存在於 callback
+
 3) **Wrong status code**  
    - callback 非 array / 空陣列 → 應回 400  
    - 正常 callback → 應回 204  
@@ -58,4 +62,3 @@ go test ./internal/sbi -run TestHTTPNwdafEventsNotification
 - **Delete 204**  
   - Delete 行為由 handler 及 client 邏輯覆蓋，尚未額外建立單獨 unit test  
   - 可依後續需求擴充
-

@@ -39,6 +39,7 @@
     *   路徑：`#/components/schemas/EventSubscription/properties/event`。
 *   **tgtUe**: 目標 UE 資訊（SMF 訂閱時須提供 SUPI 或 Internal-Group-Id）。
     *   路徑：`#/components/schemas/EventSubscription/properties/tgtUe`。
+*   **notifCorrId**: 選填；SMF 會接受缺失並以 `subscriptionId` 作為後續關聯依據。
 
 ---
 
