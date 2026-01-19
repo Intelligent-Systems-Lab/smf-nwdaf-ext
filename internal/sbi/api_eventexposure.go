@@ -9,6 +9,9 @@
 
 // Task2: Nsmf_EventExposure subscription handlers (TS 29.508).
 // Behavior summary: Create returns 201 + Location; Delete returns 204; errors return ProblemDetails.
+// Capabilities (V0):
+// - Implemented: POST /subscriptions, DELETE /subscriptions/{subId}
+// - Stubbed: GET /subscriptions/{subId}, PUT /subscriptions/{subId}
 package sbi
 
 import (
@@ -83,6 +86,14 @@ type upfEventExposureConsumer interface {
 		upfLocation string,
 		subId string,
 	) (int, string, error)
+}
+
+// NsmfEventExposureHandler documents the full handler surface (placeholders for future use).
+type NsmfEventExposureHandler interface {
+	HTTPCreateIndividualSubcription(*gin.Context)
+	HTTPDeleteIndividualSubcription(*gin.Context)
+	HTTPGetIndividualSubcription(*gin.Context)
+	HTTPReplaceIndividualSubcription(*gin.Context)
 }
 
 func (s *Server) getEventExposureRoutes() []Route {
@@ -334,11 +345,13 @@ func (s *Server) HTTPDeleteIndividualSubcription(c *gin.Context) {
 
 // SubscriptionsSubIdGet -
 func (s *Server) HTTPGetIndividualSubcription(c *gin.Context) {
+	// TODO: Implement GET /subscriptions/{subId} per TS 29.508 when needed.
 	c.JSON(http.StatusNotImplemented, gin.H{})
 }
 
 // SubscriptionsSubIdPut -
 func (s *Server) HTTPReplaceIndividualSubcription(c *gin.Context) {
+	// TODO: Implement PUT /subscriptions/{subId} per TS 29.508 when needed.
 	c.JSON(http.StatusNotImplemented, gin.H{})
 }
 

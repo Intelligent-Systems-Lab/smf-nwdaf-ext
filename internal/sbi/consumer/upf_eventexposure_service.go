@@ -14,11 +14,26 @@ import (
 	"github.com/free5gc/smf/internal/logger"
 )
 
+// Capabilities (V0):
+// - Implemented: POST /ee-subscriptions, DELETE /ee-subscriptions/{subscriptionId}
+// - Not implemented (stubbed by design): PATCH /ee-subscriptions/{subscriptionId}
 type nupfEventExposureService struct {
 	consumer *Consumer
 
 	httpClientMu sync.RWMutex
 	httpClient   *http.Client
+}
+
+// NupfEventExposureOperations enumerates TS 29.564 operations for future expansion.
+type NupfEventExposureOperations interface {
+	SendCreateNupfEventExposureSubscription(ctx context.Context, apiRoot string, payload any) (string, int, error)
+	SendDeleteNupfEventExposureSubscription(
+		ctx context.Context,
+		apiRoot string,
+		upfLocation string,
+		subId string,
+	) (int, string, error)
+	// TODO: Implement PATCH /ee-subscriptions/{subscriptionId} when modify is needed.
 }
 
 func (s *nupfEventExposureService) getHTTPClient() *http.Client {
