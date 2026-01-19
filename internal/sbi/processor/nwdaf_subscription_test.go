@@ -1,4 +1,4 @@
-package processor
+package processor_test
 
 import (
 	"bytes"
@@ -13,6 +13,8 @@ import (
 	"github.com/free5gc/openapi/models"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/internal/sbi/consumer"
+	"github.com/free5gc/smf/internal/sbi/processor"
+	"github.com/free5gc/smf/pkg/app"
 	"github.com/free5gc/smf/pkg/factory"
 )
 
@@ -22,27 +24,24 @@ type testProcessorApp struct {
 	consumer *consumer.Consumer
 }
 
-func (a *testProcessorApp) SetLogEnable(bool)    {}
-func (a *testProcessorApp) SetLogLevel(string)   {}
-func (a *testProcessorApp) SetReportCaller(bool) {}
-func (a *testProcessorApp) Start()               {}
-func (a *testProcessorApp) Terminate()           {}
-func (a *testProcessorApp) Context() *smf_context.SMFContext {
-	return a.ctx
-}
-func (a *testProcessorApp) Config() *factory.Config {
-	return a.cfg
-}
-func (a *testProcessorApp) Consumer() *consumer.Consumer {
-	return a.consumer
-}
+var _ app.App = (*testProcessorApp)(nil)
 
-// TestHandleOAMCreateNwdafSubscription_BuildsContractPayload verifies the created NWDAF request matches contract fields.
+func (a *testProcessorApp) SetLogEnable(bool)                {}
+func (a *testProcessorApp) SetLogLevel(string)               {}
+func (a *testProcessorApp) SetReportCaller(bool)             {}
+func (a *testProcessorApp) Start()                           {}
+func (a *testProcessorApp) Terminate()                       {}
+func (a *testProcessorApp) Context() *smf_context.SMFContext { return a.ctx }
+func (a *testProcessorApp) Config() *factory.Config          { return a.cfg }
+func (a *testProcessorApp) Consumer() *consumer.Consumer     { return a.consumer }
+
+// TestHandleOAMCreateNwdafSubscription_BuildsContractPayload verifies the NWDAF request matches contract fields.
 func TestHandleOAMCreateNwdafSubscription_BuildsContractPayload(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var received models.NnwdafEventsSubscription
-	nwdafServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var nwdafServer *httptest.Server
+	nwdafServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The contract requires POST /nnwdaf-eventssubscription/v1/subscriptions.
 		require.Equal(t, "/nnwdaf-eventssubscription/v1/subscriptions", r.URL.Path)
 		require.Equal(t, http.MethodPost, r.Method)
@@ -63,7 +62,7 @@ func TestHandleOAMCreateNwdafSubscription_BuildsContractPayload(t *testing.T) {
 	smfConsumer, err := consumer.NewConsumer(app)
 	require.NoError(t, err)
 	app.consumer = smfConsumer
-	p, err := NewProcessor(app)
+	p, err := processor.NewProcessor(app)
 	require.NoError(t, err)
 
 	body := `{
@@ -81,7 +80,7 @@ func TestHandleOAMCreateNwdafSubscription_BuildsContractPayload(t *testing.T) {
 	c.Request = req
 
 	// Execute the OAM handler to build and send the NWDAF subscription request.
-	p.HandleOAMCreateNwdafSubscription(c, &NwdafSubscriptionRequest{
+	p.HandleOAMCreateNwdafSubscription(c, &processor.NwdafSubscriptionRequest{
 		Supi:            "imsi-208930000000001",
 		NwdafApiRoot:    nwdafServer.URL,
 		NotificationURI: "http://127.0.0.2:8000/nwdaf-callback",
@@ -103,35 +102,74 @@ func TestHandleOAMCreateNwdafSubscription_BuildsContractPayload(t *testing.T) {
 	require.Equal(t, int32(60), received.EvtReq.RepPeriod)
 }
 
-// TestExtractNwdafSubscriptionId validates Location header parsing robustness.
-func TestExtractNwdafSubscriptionId(t *testing.T) {
+// TestHandleOAMCreateNwdafSubscription_ParsesLocation verifies Location parsing via stored state.
+func TestHandleOAMCreateNwdafSubscription_ParsesLocation(t *testing.T) {
 	cases := []struct {
-		name     string
-		location string
-		expect   string
+		name   string
+		expect string
 	}{
 		{
-			name:     "full_url",
-			location: "http://nwdaf.example/nnwdaf-eventssubscription/v1/subscriptions/sub123",
-			expect:   "sub123",
+			name:   "full_url",
+			expect: "sub123",
 		},
 		{
-			name:     "path_only",
-			location: "/nnwdaf-eventssubscription/v1/subscriptions/sub456",
-			expect:   "sub456",
+			name:   "path_only",
+			expect: "sub456",
 		},
 		{
-			name:     "trailing_slash",
-			location: "http://nwdaf.example/nnwdaf-eventssubscription/v1/subscriptions/sub789/",
-			expect:   "sub789",
+			name:   "trailing_slash",
+			expect: "sub789",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := extractNwdafSubscriptionId(tc.location)
+			smfCtx := &smf_context.SMFContext{NwdafSubs: smf_context.NewNwdafSubStore()}
+			cfg := &factory.Config{Configuration: &factory.Configuration{}}
+			app := &testProcessorApp{ctx: smfCtx, cfg: cfg}
+			smfConsumer, err := consumer.NewConsumer(app)
 			require.NoError(t, err)
-			require.Equal(t, tc.expect, got)
+			app.consumer = smfConsumer
+			p, err := processor.NewProcessor(app)
+			require.NoError(t, err)
+
+			baseURL := ""
+			var nwdafServer *httptest.Server
+			nwdafServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if baseURL == "" {
+					baseURL = nwdafServer.URL
+				}
+				location := baseURL + "/nnwdaf-eventssubscription/v1/subscriptions/" + tc.expect
+				if tc.name == "path_only" {
+					location = "/nnwdaf-eventssubscription/v1/subscriptions/" + tc.expect
+				}
+				if tc.name == "trailing_slash" {
+					location = baseURL + "/nnwdaf-eventssubscription/v1/subscriptions/" + tc.expect + "/"
+				}
+				w.Header().Set("Location", location)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				require.NoError(t, json.NewEncoder(w).Encode(models.NnwdafEventsSubscription{}))
+			}))
+			defer nwdafServer.Close()
+
+			req := httptest.NewRequest(http.MethodPost, "/nsmf-oam/v1/nwdaf-subscriptions", bytes.NewBufferString(`{}`))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = req
+
+			p.HandleOAMCreateNwdafSubscription(c, &processor.NwdafSubscriptionRequest{
+				Supi:            "imsi-208930000000001",
+				NwdafApiRoot:    nwdafServer.URL,
+				NotificationURI: "http://127.0.0.2:8000/nwdaf-callback",
+				NotifCorrId:     "my-correlation-001",
+			})
+
+			require.Equal(t, http.StatusCreated, rec.Code)
+			state, ok := smfCtx.NwdafSubs.GetBySubscriptionId(tc.expect)
+			require.True(t, ok)
+			require.Equal(t, tc.expect, state.SubscriptionId)
 		})
 	}
 }

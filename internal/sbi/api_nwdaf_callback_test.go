@@ -1,4 +1,4 @@
-package sbi
+package sbi_test
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	smf_context "github.com/free5gc/smf/internal/context"
+	"github.com/free5gc/smf/internal/sbi"
 	"github.com/free5gc/smf/internal/sbi/consumer"
 	"github.com/free5gc/smf/internal/sbi/processor"
 	"github.com/free5gc/smf/pkg/factory"
@@ -22,26 +23,16 @@ type testServerApp struct {
 	proc *processor.Processor
 }
 
-func (a *testServerApp) SetLogEnable(bool)    {}
-func (a *testServerApp) SetLogLevel(string)   {}
-func (a *testServerApp) SetReportCaller(bool) {}
-func (a *testServerApp) Start()               {}
-func (a *testServerApp) Terminate()           {}
-func (a *testServerApp) Context() *smf_context.SMFContext {
-	return a.ctx
-}
-func (a *testServerApp) Config() *factory.Config {
-	return a.cfg
-}
-func (a *testServerApp) Consumer() *consumer.Consumer {
-	return nil
-}
-func (a *testServerApp) Processor() *processor.Processor {
-	return a.proc
-}
-func (a *testServerApp) CancelContext() context.Context {
-	return context.Background()
-}
+func (a *testServerApp) SetLogEnable(bool)                {}
+func (a *testServerApp) SetLogLevel(string)               {}
+func (a *testServerApp) SetReportCaller(bool)             {}
+func (a *testServerApp) Start()                           {}
+func (a *testServerApp) Terminate()                       {}
+func (a *testServerApp) Context() *smf_context.SMFContext { return a.ctx }
+func (a *testServerApp) Config() *factory.Config          { return a.cfg }
+func (a *testServerApp) Consumer() *consumer.Consumer     { return nil }
+func (a *testServerApp) Processor() *processor.Processor  { return a.proc }
+func (a *testServerApp) CancelContext() context.Context   { return context.Background() }
 
 // TestHTTPNwdafEventsNotification_OK verifies callback accepts a JSON array and returns 204.
 func TestHTTPNwdafEventsNotification_OK(t *testing.T) {
@@ -54,7 +45,7 @@ func TestHTTPNwdafEventsNotification_OK(t *testing.T) {
 	require.NoError(t, err)
 	app.proc = proc
 
-	server := &Server{ServerSmf: app}
+	server := &sbi.Server{ServerSmf: app}
 
 	body := `[
 	  {
@@ -99,7 +90,7 @@ func TestHTTPNwdafEventsNotification_Invalid(t *testing.T) {
 	require.NoError(t, err)
 	app.proc = proc
 
-	server := &Server{ServerSmf: app}
+	server := &sbi.Server{ServerSmf: app}
 
 	tests := []struct {
 		name string
