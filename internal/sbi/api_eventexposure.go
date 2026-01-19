@@ -77,6 +77,12 @@ type upfEventExposureEvent struct {
 
 type upfEventExposureConsumer interface {
 	SendCreateNupfEventExposureSubscription(ctx context.Context, apiRoot string, payload any) (string, int, error)
+	SendDeleteNupfEventExposureSubscription(
+		ctx context.Context,
+		apiRoot string,
+		upfLocation string,
+		subId string,
+	) (int, string, error)
 }
 
 func (s *Server) getEventExposureRoutes() []Route {
@@ -279,23 +285,47 @@ func (s *Server) HTTPDeleteIndividualSubcription(c *gin.Context) {
 		return
 	}
 
-	state, ok := smf_context.GetSelf().NsmfEventExposureSubs.Delete(subId)
+	state, ok := smf_context.GetSelf().NsmfEventExposureSubs.Get(subId)
 	if !ok {
 		logger.SBILog.WithFields(map[string]interface{}{
 			"nsmf_sub_id": subId,
-			"http_status": http.StatusNotFound,
-		}).Info("Nsmf_EventExposure subscription not found")
+			"http_status": http.StatusNoContent,
+		}).Info("Nsmf_EventExposure subscription not found; delete is idempotent")
 
-		problemDetails := openapi.ProblemDetailsDataNotFound("subscription not found")
-		c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(problemDetails.Status)))
-		c.JSON(int(problemDetails.Status), problemDetails)
+		c.Status(http.StatusNoContent)
 		return
 	}
+
+	// Cleanup invariant: once delete is requested, local state is removed regardless of UPF outcome.
+	upfStatus := 0
+	upfBody := ""
+	upfErr := error(nil)
+	if state.UpfLocation != "" || state.UpfSubId != "" {
+		upfStatus, upfBody, upfErr = s.Consumer().SendDeleteNupfEventExposureSubscription(
+			context.Background(),
+			state.UpfApiRoot,
+			state.UpfLocation,
+			state.UpfSubId,
+		)
+		if upfErr != nil {
+			logger.SBILog.WithFields(map[string]interface{}{
+				logger.FieldSupi: state.Supi,
+				"nsmf_sub_id":    subId,
+				"upf_location":   state.UpfLocation,
+				"http_status":    upfStatus,
+				"upf_body":       truncateLogBody(upfBody),
+			}).Warnf("Nsmf_EventExposure cascade UPF delete failed: %v", upfErr)
+		}
+	}
+
+	smf_context.GetSelf().NsmfEventExposureSubs.Delete(subId)
 
 	logger.SBILog.WithFields(map[string]interface{}{
 		logger.FieldSupi: state.Supi,
 		"notif_id":       state.NotifId,
 		"nsmf_sub_id":    subId,
+		"upf_location":   state.UpfLocation,
+		"upf_result":     upfDeleteResult(upfErr, upfStatus),
 		"http_status":    http.StatusNoContent,
 	}).Info("Nsmf_EventExposure subscription deleted")
 
@@ -493,4 +523,22 @@ func extractUpfSubscriptionId(location string) string {
 		return ""
 	}
 	return parts[len(parts)-1]
+}
+
+func truncateLogBody(body string) string {
+	const maxLen = 256
+	if len(body) <= maxLen {
+		return body
+	}
+	return body[:maxLen] + "..."
+}
+
+func upfDeleteResult(err error, status int) string {
+	if err != nil {
+		return fmt.Sprintf("failed(%d)", status)
+	}
+	if status == 0 {
+		return "skipped"
+	}
+	return fmt.Sprintf("success(%d)", status)
 }
