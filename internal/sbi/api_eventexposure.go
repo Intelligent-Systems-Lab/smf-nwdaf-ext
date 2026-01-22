@@ -60,10 +60,11 @@ type upfEventExposureCreateRequest struct {
 
 type upfEventExposureSubscription struct {
 	NfId              string                  `json:"nfId"`
-	UeIpAddress       string                  `json:"ueIpAddress"`
+	UeIpAddress       string                  `json:"ueIpAddress,omitempty"`
+	AnyUe             bool                    `json:"anyUe,omitempty"`
 	EventList         []upfEventExposureEvent `json:"eventList"`
 	EventNotifyUri    string                  `json:"eventNotifyUri"`
-	NotifyCorrelation string                  `json:"notifyCorrelationId"`
+	NotifyCorrelation string                  `json:"notifyCorrelationId,omitempty"`
 	EventReporting    upfEventExposureMode    `json:"eventReportingMode"`
 }
 
@@ -193,9 +194,17 @@ func (s *Server) HTTPCreateIndividualSubcription(c *gin.Context) {
 		return
 	}
 
+	nfId := strings.TrimSpace(smf_context.GetSelf().NfInstanceID)
+	if nfId == "" {
+		// Ensure nfId is present for UPF CreateSubscription; fallback to a generated UUID.
+		nfId = uuid.New().String()
+		smf_context.GetSelf().NfInstanceID = nfId
+		logger.SBILog.Warn("SMF nfInstanceId missing; generated a new UUID for UPF subscription")
+	}
+
 	upfCreateReq := upfEventExposureCreateRequest{
 		Subscription: upfEventExposureSubscription{
-			NfId:        smf_context.GetSelf().NfInstanceID,
+			NfId:        nfId,
 			UeIpAddress: ueIP,
 			EventList:   upfEvents,
 			// Correlation propagation: notifId -> notifyCorrelationId for direct UPF->NWDAF notifications.

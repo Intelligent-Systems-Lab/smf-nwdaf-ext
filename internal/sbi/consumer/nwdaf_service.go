@@ -5,6 +5,7 @@ package consumer
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 
@@ -38,6 +39,10 @@ func (s *nwdafService) getEventsSubscriptionClient(apiRoot string) *EventsSubscr
 
 	configuration := EventsSubscription.NewConfiguration()
 	configuration.SetBasePath(basePath)
+	// Force HTTP/1.1 because NWDAF may not support HTTP/2.
+	configuration.SetHTTPClient(&http.Client{
+		Transport: &http.Transport{ForceAttemptHTTP2: false},
+	})
 	configuration.SetMetrics(sbi_metrics.SbiMetricHook)
 	client = EventsSubscription.NewAPIClient(configuration)
 
@@ -91,8 +96,8 @@ func (s *nwdafService) SendDeleteNwdafEventsSubscription(
 // normalizeNwdafBasePath ensures apiRoot points to /nnwdaf-eventssubscription/v1.
 func normalizeNwdafBasePath(apiRoot string) string {
 	trimmed := strings.TrimRight(apiRoot, "/")
-	if strings.Contains(trimmed, "/nnwdaf-eventssubscription/") {
-		return trimmed
+	if index := strings.Index(trimmed, "/nnwdaf-eventssubscription/"); index != -1 {
+		return strings.TrimRight(trimmed[:index], "/")
 	}
-	return trimmed + "/nnwdaf-eventssubscription/v1"
+	return trimmed
 }
