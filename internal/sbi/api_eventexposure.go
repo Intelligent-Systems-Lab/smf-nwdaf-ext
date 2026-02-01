@@ -10,12 +10,59 @@
 package sbi
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
+
+	"github.com/free5gc/openapi"
+	"github.com/free5gc/openapi/models"
+	smf_context "github.com/free5gc/smf/internal/context"
+	"github.com/free5gc/smf/internal/logger"
+	"github.com/free5gc/smf/pkg/factory"
+	"github.com/free5gc/util/metrics/sbi"
+)
+
+// nsmfEventExposureCreateRequest mirrors the contract payload for Task2 Patch 1.
+// It intentionally models only the fields needed for strict validation in V0, so
+// additional OpenAPI fields are ignored rather than loosely validated.
+type nsmfEventExposureCreateRequest struct {
+	Supi        string                         `json:"supi"`
+	NotifUri    string                         `json:"notifUri"`
+	NotifId     string                         `json:"notifId"`
+	EventSubs   []nsmfEventExposureEventSubReq `json:"eventSubs"`
+	NotifMethod string                         `json:"notifMethod,omitempty"`
+	RepPeriod   int32                          `json:"repPeriod,omitempty"`
+}
+
+// nsmfEventExposureEventSubReq captures the per-event subscription block and
+// surfaces only the UPF-related elements required by the Task2 contract.
+type nsmfEventExposureEventSubReq struct {
+	Event                 string                      `json:"event"`
+	UpfEvents             []nsmfEventExposureUpfEvent `json:"upfEvents"`
+	BundlingAllowed       *bool                       `json:"bundlingAllowed,omitempty"`
+	BundledEventNotifyUri string                      `json:"bundledEventNotifyUri"`
+}
+
+// nsmfEventExposureUpfEvent captures the UPF event payload used for strict
+// validation of user data usage measurement semantics.
+type nsmfEventExposureUpfEvent struct {
+	Type                     string   `json:"type"`
+	MeasurementTypes         []string `json:"measurementTypes"`
+	GranularityOfMeasurement string   `json:"granularityOfMeasurement"`
+}
+
+const (
+	nsmfUpfEventName = "UPF_EVENT"
 )
 
 func (s *Server) getEventExposureRoutes() []Route {
+	// The routes are registered on startup via server.go when the service name
+	// list includes nsmf-event-exposure; no manual trigger is required.
 	return []Route{
 		{
 			Name:    "Index",
@@ -54,12 +101,92 @@ func (s *Server) getEventExposureRoutes() []Route {
 
 // SubscriptionsPost -
 func (s *Server) HTTPCreateIndividualSubcription(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{})
+	// Lifecycle: parse -> validate -> persist -> respond (no UPF cascading in Patch 1).
+	// This handler intentionally does not call any UPF API; it only validates and
+	// stores the subscription for later patches to consume.
+	logger.SBILog.Info("Receive Nsmf_EventExposure Create Subscription Request")
+
+	var request nsmfEventExposureCreateRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		problemDetail := "[Request Body] " + err.Error()
+		logger.SBILog.Errorln(problemDetail)
+		problemDetails := openapi.ProblemDetailsMalformedReqSyntax(problemDetail)
+		c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(problemDetails.Status)))
+		c.JSON(int(problemDetails.Status), problemDetails)
+		return
+	}
+
+	// Validate contract constraints and extract the UPF_EVENT payload fields.
+	// Any deviation is reported using ProblemDetails with invalidParams for traceability.
+	state, problemDetails := validateNsmfEventExposureCreate(&request)
+	if problemDetails != nil {
+		logger.SBILog.WithFields(logrusFieldsForCreate(&request, "", state)).
+			WithField("http_status", int(problemDetails.Status)).
+			Warn(problemDetails.Detail)
+		c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(problemDetails.Status)))
+		c.JSON(int(problemDetails.Status), problemDetails)
+		return
+	}
+
+	// Generate a subscription ID that can be used as a URI path segment.
+	// The ID is stored verbatim and echoed in the Location header.
+	state.SubId = uuid.NewString()
+	state.CreatedAt = time.Now().UTC()
+
+	// Persist in memory to support DELETE in Patch 1 and future UPF cascading.
+	// This is process-local and will be replaced by more durable state if needed.
+	smf_context.StoreNsmfEventExposureSubscription(state)
+
+	response := &models.NsmfEventExposure{
+		SubId:       state.SubId,
+		Supi:        state.Supi,
+		NotifId:     state.NotifId,
+		NotifUri:    state.NotifUri,
+		NotifMethod: models.SmfEventExposureNotificationMethod(request.NotifMethod),
+		RepPeriod:   request.RepPeriod,
+		EventSubs: []models.SmfEventExposureEventSubscription{
+			{Event: models.SmfEvent(nsmfUpfEventName)},
+		},
+	}
+
+	// Build a full resource URI that matches TS 29.508 Location header requirements.
+	location := buildEventExposureLocation(c, state.SubId)
+	c.Header("Location", location)
+	c.JSON(http.StatusCreated, response)
+
+	logger.SBILog.WithFields(logrusFieldsForCreate(&request, state.SubId, state)).
+		WithField("http_status", http.StatusCreated).
+		Info("Nsmf subscription created")
 }
 
 // SubscriptionsSubIdDelete -
 func (s *Server) HTTPDeleteIndividualSubcription(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{})
+	// Lifecycle: lookup -> delete -> respond (no UPF cascading in Patch 1).
+	// If the subscription is missing, a 404 ProblemDetails is returned and logged.
+	subId := c.Param("subId")
+	if subId == "" {
+		problemDetails := openapi.ProblemDetailsMalformedReqSyntax("missing subId in path")
+		c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(problemDetails.Status)))
+		c.JSON(int(problemDetails.Status), problemDetails)
+		return
+	}
+
+	state, ok := smf_context.DeleteNsmfEventExposureSubscription(subId)
+	if !ok {
+		detail := fmt.Sprintf("subscription [%s] not found", subId)
+		problemDetails := openapi.ProblemDetailsDataNotFound(detail)
+		logger.SBILog.WithFields(logrusFieldsForDelete(subId, nil)).
+			WithField("http_status", int(problemDetails.Status)).
+			Warn(detail)
+		c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(problemDetails.Status)))
+		c.JSON(int(problemDetails.Status), problemDetails)
+		return
+	}
+
+	logger.SBILog.WithFields(logrusFieldsForDelete(subId, state)).
+		WithField("http_status", http.StatusNoContent).
+		Info("Nsmf subscription deleted")
+	c.Status(http.StatusNoContent)
 }
 
 // SubscriptionsSubIdGet -
@@ -70,4 +197,231 @@ func (s *Server) HTTPGetIndividualSubcription(c *gin.Context) {
 // SubscriptionsSubIdPut -
 func (s *Server) HTTPReplaceIndividualSubcription(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{})
+}
+
+// validateNsmfEventExposureCreate enforces Task2 Patch 1 contract rules and returns
+// a state object ready for in-memory storage. It is intentionally strict to prevent
+// partial/ambiguous subscriptions from entering the store.
+func validateNsmfEventExposureCreate(
+	request *nsmfEventExposureCreateRequest,
+) (*smf_context.NsmfEventExposureSubscriptionState, *models.ProblemDetails) {
+	var invalidParams []models.InvalidParam
+
+	// V0 contract: only single-UE subscription is supported, so supi is mandatory.
+	if strings.TrimSpace(request.Supi) == "" {
+		invalidParams = append(invalidParams, invalidParam("/supi", "supi is required for V0 single-UE subscription"))
+	}
+	if strings.TrimSpace(request.NotifId) == "" {
+		invalidParams = append(invalidParams, invalidParam("/notifId", "notifId is required"))
+	}
+	if strings.TrimSpace(request.NotifUri) == "" {
+		invalidParams = append(invalidParams, invalidParam("/notifUri", "notifUri is required"))
+	}
+	if len(request.EventSubs) == 0 {
+		invalidParams = append(invalidParams, invalidParam("/eventSubs", "eventSubs must contain UPF_EVENT"))
+	}
+
+	// Contract invariant: eventSubs must contain UPF_EVENT with upfEvents using USER_DATA_USAGE_MEASURES.
+	var selectedEventSub *nsmfEventExposureEventSubReq
+	var selectedUpfEvent *nsmfEventExposureUpfEvent
+	for idx := range request.EventSubs {
+		sub := &request.EventSubs[idx]
+		// Only UPF_EVENT is supported in V0; reject any other event explicitly.
+		if sub.Event != nsmfUpfEventName {
+			invalidParams = append(
+				invalidParams,
+				invalidParam(fmt.Sprintf("/eventSubs/%d/event", idx), "event must be UPF_EVENT"),
+			)
+			continue
+		}
+		// bundledEventNotifyUri is a hard requirement in Task2 semantics.
+		if strings.TrimSpace(sub.BundledEventNotifyUri) == "" {
+			invalidParams = append(
+				invalidParams,
+				invalidParam(
+					fmt.Sprintf("/eventSubs/%d/bundledEventNotifyUri", idx),
+					"bundledEventNotifyUri is required",
+				),
+			)
+		}
+		// upfEvents must contain USER_DATA_USAGE_MEASURES with measurementTypes + granularity.
+		if len(sub.UpfEvents) == 0 {
+			invalidParams = append(
+				invalidParams,
+				invalidParam(
+					fmt.Sprintf("/eventSubs/%d/upfEvents", idx),
+					"upfEvents must include USER_DATA_USAGE_MEASURES",
+				),
+			)
+			continue
+		}
+		for upfIdx := range sub.UpfEvents {
+			upfEvent := &sub.UpfEvents[upfIdx]
+			if upfEvent.Type != "USER_DATA_USAGE_MEASURES" {
+				invalidParams = append(
+					invalidParams,
+					invalidParam(
+						fmt.Sprintf("/eventSubs/%d/upfEvents/%d/type", idx, upfIdx),
+						"type must be USER_DATA_USAGE_MEASURES",
+					),
+				)
+				continue
+			}
+			if len(upfEvent.MeasurementTypes) == 0 {
+				invalidParams = append(
+					invalidParams,
+					invalidParam(
+						fmt.Sprintf("/eventSubs/%d/upfEvents/%d/measurementTypes", idx, upfIdx),
+						"measurementTypes must contain at least one value",
+					),
+				)
+			}
+			for mtIdx, mt := range upfEvent.MeasurementTypes {
+				if mt != "VOLUME_MEASUREMENT" && mt != "THROUGHPUT_MEASUREMENT" {
+					invalidParams = append(
+						invalidParams,
+						invalidParam(
+							fmt.Sprintf(
+								"/eventSubs/%d/upfEvents/%d/measurementTypes/%d",
+								idx,
+								upfIdx,
+								mtIdx,
+							),
+							"only VOLUME_MEASUREMENT and THROUGHPUT_MEASUREMENT are allowed",
+						),
+					)
+				}
+			}
+			if strings.TrimSpace(upfEvent.GranularityOfMeasurement) == "" {
+				invalidParams = append(
+					invalidParams,
+					invalidParam(
+						fmt.Sprintf("/eventSubs/%d/upfEvents/%d/granularityOfMeasurement", idx, upfIdx),
+						"granularityOfMeasurement is required (PER_SESSION expected)",
+					),
+				)
+			} else if upfEvent.GranularityOfMeasurement != "PER_SESSION" {
+				invalidParams = append(
+					invalidParams,
+					invalidParam(
+						fmt.Sprintf("/eventSubs/%d/upfEvents/%d/granularityOfMeasurement", idx, upfIdx),
+						"granularityOfMeasurement must be PER_SESSION",
+					),
+				)
+			}
+			// Capture the first valid UPF_EVENT payload for storage/logging.
+			if selectedEventSub == nil && selectedUpfEvent == nil {
+				selectedEventSub = sub
+				selectedUpfEvent = upfEvent
+			}
+		}
+	}
+
+	if len(invalidParams) != 0 {
+		problemDetails := openapi.ProblemDetailsMalformedReqSyntax("invalid Nsmf subscription request")
+		problemDetails.InvalidParams = invalidParams
+		return nil, problemDetails
+	}
+
+	// Store only the V0-relevant fields in the in-memory subscription state.
+	state := &smf_context.NsmfEventExposureSubscriptionState{
+		Supi:                  request.Supi,
+		NotifId:               request.NotifId,
+		NotifUri:              request.NotifUri,
+		RepPeriod:             request.RepPeriod,
+		NotifMethod:           request.NotifMethod,
+		MeasurementTypes:      append([]string{}, selectedUpfEvent.MeasurementTypes...),
+		GranularityOfMeasure:  selectedUpfEvent.GranularityOfMeasurement,
+		BundledEventNotifyUri: selectedEventSub.BundledEventNotifyUri,
+		UpfEventType:          selectedUpfEvent.Type,
+		SmfEventType:          selectedEventSub.Event,
+	}
+
+	return state, nil
+}
+
+func invalidParam(param, reason string) models.InvalidParam {
+	return models.InvalidParam{
+		Param:  param,
+		Reason: reason,
+	}
+}
+
+func buildEventExposureLocation(c *gin.Context, subId string) string {
+	// Default to a bare subId when request context is missing (unit tests or mocks).
+	if c.Request == nil {
+		return subId
+	}
+	protocol := "http"
+	if c.Request.TLS != nil {
+		protocol = "https"
+	}
+	return fmt.Sprintf(
+		"%s://%s%s/subscriptions/%s",
+		protocol,
+		c.Request.Host,
+		factory.SmfEventExposureResUriPrefix,
+		subId,
+	)
+}
+
+func logrusFieldsForCreate(
+	request *nsmfEventExposureCreateRequest,
+	subId string,
+	state *smf_context.NsmfEventExposureSubscriptionState,
+) logrus.Fields {
+	// Prefer state values when available because they reflect validated selections.
+	fields := logrus.Fields{
+		"supi":                     request.Supi,
+		"notif_id":                 request.NotifId,
+		"nsmf_sub_id":              subId,
+		"rep_period":               request.RepPeriod,
+		"measurement_types":        requestMeasurementTypes(request),
+		"bundled_event_notify_uri": requestBundledEventNotifyUri(request),
+	}
+	if state != nil {
+		fields["measurement_types"] = state.MeasurementTypes
+		fields["bundled_event_notify_uri"] = state.BundledEventNotifyUri
+	}
+	return fields
+}
+
+func logrusFieldsForDelete(
+	subId string,
+	state *smf_context.NsmfEventExposureSubscriptionState,
+) logrus.Fields {
+	// Keep deletion logs concise but include SUPI/NotifId when available for traceability.
+	fields := logrus.Fields{
+		"nsmf_sub_id": subId,
+	}
+	if state != nil {
+		fields["supi"] = state.Supi
+		fields["notif_id"] = state.NotifId
+	}
+	return fields
+}
+
+func requestMeasurementTypes(request *nsmfEventExposureCreateRequest) []string {
+	// This helper extracts the first UPF_EVENT measurement types for logging only.
+	for _, sub := range request.EventSubs {
+		if sub.Event != nsmfUpfEventName {
+			continue
+		}
+		for _, upfEvent := range sub.UpfEvents {
+			if upfEvent.Type == "USER_DATA_USAGE_MEASURES" {
+				return upfEvent.MeasurementTypes
+			}
+		}
+	}
+	return nil
+}
+
+func requestBundledEventNotifyUri(request *nsmfEventExposureCreateRequest) string {
+	// This helper extracts the first UPF_EVENT bundledEventNotifyUri for logging only.
+	for _, sub := range request.EventSubs {
+		if sub.Event == nsmfUpfEventName {
+			return sub.BundledEventNotifyUri
+		}
+	}
+	return ""
 }
