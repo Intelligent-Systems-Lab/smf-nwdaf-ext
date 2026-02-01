@@ -244,7 +244,8 @@ func (s *Server) HTTPCreateIndividualSubcription(c *gin.Context) {
 
 // SubscriptionsSubIdDelete -
 func (s *Server) HTTPDeleteIndividualSubcription(c *gin.Context) {
-	// Lifecycle: lookup -> delete -> respond (no UPF cascading in Patch 1).
+	// Lifecycle: lookup -> (optional) UPF delete -> local delete -> respond.
+	// Idempotency rule: even if UPF delete fails or UPF already deleted it, local cleanup proceeds.
 	// If the subscription is missing, a 404 ProblemDetails is returned and logged.
 	subId := c.Param("subId")
 	if subId == "" {
@@ -254,7 +255,7 @@ func (s *Server) HTTPDeleteIndividualSubcription(c *gin.Context) {
 		return
 	}
 
-	state, ok := smf_context.DeleteNsmfEventExposureSubscription(subId)
+	state, ok := smf_context.GetNsmfEventExposureSubscription(subId)
 	if !ok {
 		detail := fmt.Sprintf("subscription [%s] not found", subId)
 		problemDetails := openapi.ProblemDetailsDataNotFound(detail)
@@ -265,6 +266,27 @@ func (s *Server) HTTPDeleteIndividualSubcription(c *gin.Context) {
 		c.JSON(int(problemDetails.Status), problemDetails)
 		return
 	}
+
+	// If linkage exists, attempt UPF delete first, but always clean local state.
+	if state.UpfSubscriptionLocation != "" {
+		status, bodySummary, upfProblem := deleteUpfEventExposureSubscription(
+			c.Request.Context(),
+			state.SelectedUpfApiRoot,
+			state.UpfSubscriptionLocation,
+		)
+		if upfProblem != nil {
+			logger.SBILog.WithFields(logrusFieldsForUpfDelete(state, status, bodySummary)).
+				WithField("http_status", int(upfProblem.Status)).
+				Warn(upfProblem.Detail)
+		} else {
+			logger.SBILog.WithFields(logrusFieldsForUpfDelete(state, status, bodySummary)).
+				WithField("http_status", status).
+				Info("UPF subscription deleted")
+		}
+	}
+
+	// Local cleanup is deterministic regardless of UPF delete outcome.
+	_, _ = smf_context.DeleteNsmfEventExposureSubscription(subId)
 
 	logger.SBILog.WithFields(logrusFieldsForDelete(subId, state)).
 		WithField("http_status", http.StatusNoContent).
@@ -551,6 +573,27 @@ func logrusFieldsForUpfSubscribe(
 		fields["ue_ip_address"] = target.UeIpAddress.String()
 		fields["selected_upf"] = target.SelectedUpf.Name
 		fields["selected_upf_api_root"] = target.UpfApiRoot
+	}
+	return fields
+}
+
+func logrusFieldsForUpfDelete(
+	state *smf_context.NsmfEventExposureSubscriptionState,
+	status int,
+	bodySummary string,
+) logrus.Fields {
+	// Include subscription state for full traceability.
+	fields := logrus.Fields{
+		"nsmf_sub_id":  state.SubId,
+		"upf_sub_id":   state.UpfSubscriptionId,
+		"upf_location": state.UpfSubscriptionLocation,
+		"upf_status":   status,
+		"upf_body":     bodySummary,
+		"selected_upf": "",
+		"upf_api_root": state.SelectedUpfApiRoot,
+	}
+	if state.SelectedUpfApiRoot != "" {
+		fields["upf_api_root"] = state.SelectedUpfApiRoot
 	}
 	return fields
 }

@@ -158,3 +158,61 @@ func problemDetailsSystemFailure(detail string) *models.ProblemDetails {
 		Cause:  "SYSTEM_FAILURE",
 	}
 }
+
+func deleteUpfEventExposureSubscription(
+	ctx context.Context,
+	apiRoot string,
+	upfLocation string,
+) (int, string, *models.ProblemDetails) {
+	// If the UPF returned a full Location, use it verbatim; otherwise, build from apiRoot + ID.
+	url := strings.TrimSpace(upfLocation)
+	if url == "" {
+		return 0, "", problemDetailsBadGateway("missing UPF subscription location")
+	}
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		url = strings.TrimSuffix(apiRoot, "/") + "/nupf-ee/v1/ee-subscriptions/" + strings.TrimPrefix(url, "/")
+	}
+
+	client := &http.Client{Timeout: resolveUpfRequestTimeout()}
+	attempts := resolveUpfRetryCount() + 1
+	for attempt := 0; attempt < attempts; attempt++ {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+		if reqErr != nil {
+			return 0, "", problemDetailsSystemFailure("failed to build UPF delete request")
+		}
+
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			if attempt < attempts-1 {
+				continue
+			}
+			return 0, "", problemDetailsBadGateway(fmt.Sprintf("UPF delete failed: %v", doErr))
+		}
+
+		body, readErr := io.ReadAll(resp.Body)
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			if readErr == nil {
+				readErr = closeErr
+			}
+		}
+		if readErr != nil {
+			return resp.StatusCode, "", problemDetailsBadGateway("failed to read UPF delete response body")
+		}
+
+		if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+			return resp.StatusCode, strings.TrimSpace(string(body)), nil
+		}
+
+		if resp.StatusCode >= http.StatusInternalServerError && attempt < attempts-1 {
+			continue
+		}
+
+		detail := fmt.Sprintf("UPF delete failed with status %d", resp.StatusCode)
+		if len(body) != 0 {
+			detail = fmt.Sprintf("%s: %s", detail, strings.TrimSpace(string(body)))
+		}
+		return resp.StatusCode, strings.TrimSpace(string(body)), problemDetailsBadGateway(detail)
+	}
+
+	return 0, "", problemDetailsBadGateway("UPF delete failed after retries")
+}
