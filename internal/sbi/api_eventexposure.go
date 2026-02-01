@@ -27,6 +27,22 @@ import (
 	"github.com/free5gc/util/metrics/sbi"
 )
 
+/*
+ * Task2 V0 Capability Summary
+ *
+ * Supported in V0:
+ * - Single UE subscription by SUPI only.
+ * - UPF_EVENT with USER_DATA_USAGE_MEASURES only.
+ * - PERIODIC reporting only.
+ * - PER_SESSION granularity only.
+ *
+ * Planned for V1/V2:
+ * - Group UE or anyUeInd subscriptions.
+ * - Additional SMF events and UPF event types.
+ * - ON_EVENT_DETECTION / ONE_TIME reporting modes.
+ * - PER_APPLICATION / PER_FLOW granularity and richer filters (DNN/S-NSSAI).
+ */
+
 // nsmfEventExposureCreateRequest mirrors the contract payload for Task2 Patch 1.
 // It intentionally models only the fields needed for strict validation in V0, so
 // additional OpenAPI fields are ignored rather than loosely validated.
@@ -296,12 +312,18 @@ func (s *Server) HTTPDeleteIndividualSubcription(c *gin.Context) {
 
 // SubscriptionsSubIdGet -
 func (s *Server) HTTPGetIndividualSubcription(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{})
+	// Not exposed in V0. A future version may return the stored subscription body.
+	problemDetails := openapi.ProblemDetailsOperationNotSupported()
+	c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(problemDetails.Status)))
+	c.JSON(int(problemDetails.Status), problemDetails)
 }
 
 // SubscriptionsSubIdPut -
 func (s *Server) HTTPReplaceIndividualSubcription(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{})
+	// Not exposed in V0. Replace requires full UPF re-subscribe semantics.
+	problemDetails := openapi.ProblemDetailsOperationNotSupported()
+	c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(problemDetails.Status)))
+	c.JSON(int(problemDetails.Status), problemDetails)
 }
 
 // validateNsmfEventExposureCreate enforces Task2 Patch 1 contract rules and returns

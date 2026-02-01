@@ -48,6 +48,11 @@ type upfEventExposureReportMode struct {
 	RepPeriod int32  `json:"repPeriod,omitempty"`
 }
 
+// NOTE: The following TS 29.564 operations are intentionally not implemented in V0:
+// - ModifySubscription (PATCH /ee-subscriptions/{subscriptionId})
+// - List subscriptions (GET collection) and Get individual (GET by ID)
+// These will be added when SMF supports advanced lifecycle management.
+
 func resolveUpfNfId() string {
 	// Prefer explicit NUPF NF ID; fall back to SMF's nfInstanceId.
 	cfg := factory.SmfConfig.Configuration
