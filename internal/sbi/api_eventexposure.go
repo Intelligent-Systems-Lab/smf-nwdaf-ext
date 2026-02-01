@@ -50,6 +50,7 @@ type nsmfEventExposureEventSubReq struct {
 
 // nsmfEventExposureUpfEvent captures the UPF event payload used for strict
 // validation of user data usage measurement semantics.
+// Only USER_DATA_USAGE_MEASURES is accepted in V0.
 type nsmfEventExposureUpfEvent struct {
 	Type                     string   `json:"type"`
 	MeasurementTypes         []string `json:"measurementTypes"`
@@ -57,7 +58,11 @@ type nsmfEventExposureUpfEvent struct {
 }
 
 const (
-	nsmfUpfEventName = "UPF_EVENT"
+	// These constants align with TS 29.508/29.564 string enums used in validation.
+	nsmfUpfEventName              = "UPF_EVENT"
+	upfEventUsageMeasures         = "USER_DATA_USAGE_MEASURES"
+	upfEventGranularityPerSession = "PER_SESSION"
+	upfEventReportTriggerPeriodic = "PERIODIC"
 )
 
 func (s *Server) getEventExposureRoutes() []Route {
@@ -128,10 +133,84 @@ func (s *Server) HTTPCreateIndividualSubcription(c *gin.Context) {
 		return
 	}
 
+	// Resolve UE IP and selected UPF API root before persisting any subscription state.
+	// This enforces the rollback-free rule: no local state is written on resolve failure.
+	target, resolveErr := smf_context.ResolveUpfEventExposureTarget(request.Supi)
+	if resolveErr != nil {
+		resolverProblemDetails := mapResolverErrorToProblemDetails(resolveErr)
+		logger.SBILog.WithFields(logrusFieldsForResolver(request.Supi, resolveErr, target)).
+			WithField("http_status", int(resolverProblemDetails.Status)).
+			Warn(resolverProblemDetails.Detail)
+		c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(resolverProblemDetails.Status)))
+		c.JSON(int(resolverProblemDetails.Status), resolverProblemDetails)
+		return
+	}
+
+	logger.SBILog.WithFields(logrusFieldsForResolver(request.Supi, nil, target)).
+		Info("Resolved SUPI to UE IP and UPF apiRoot")
+
+	// Assign an Nsmf subscription ID used for logging and response if UPF succeeds.
+	// The ID is not persisted until the UPF subscription returns 201 Created.
+	nsmfSubId := uuid.NewString()
+
+	// Apply repPeriod defaulting to keep UPF reporting mode deterministic.
+	// Precedence: request.repPeriod -> configuration.urrPeriod -> hardcoded 10s.
+	repPeriod := request.RepPeriod
+	if repPeriod == 0 {
+		if factory.SmfConfig.Configuration.UrrPeriod != 0 {
+			repPeriod = int32(factory.SmfConfig.Configuration.UrrPeriod)
+		} else {
+			repPeriod = 10
+		}
+	}
+
+	// The UPF API requires a top-level {\"subscription\": {...}} wrapper (TS 29.564).
+	// This mapping also enforces the fixed Task2 semantics for notifyCorrelationId/eventNotifyUri.
+	// eventNotifyUri MUST equal bundledEventNotifyUri; notifyCorrelationId MUST equal notifId.
+	upfRequest := upfEventExposureCreateRequest{
+		Subscription: upfEventExposureSubscription{
+			NfId:        resolveUpfNfId(),
+			UeIpAddress: target.UeIpAddress.String(),
+			EventList: []upfEventExposureEvent{
+				{
+					Type:                     upfEventUsageMeasures,
+					MeasurementTypes:         state.MeasurementTypes,
+					GranularityOfMeasurement: state.GranularityOfMeasure,
+				},
+			},
+			EventNotifyUri:      state.BundledEventNotifyUri,
+			NotifyCorrelationId: state.NotifId,
+			EventReportingMode: upfEventExposureReportMode{
+				Trigger:   upfEventReportTriggerPeriodic,
+				RepPeriod: repPeriod,
+			},
+		},
+	}
+
+	// Perform the UPF subscription call; failures return ProblemDetails and no local state is saved.
+	upfLocation, upfStatus, upfProblem := createUpfEventExposureSubscription(
+		c.Request.Context(),
+		target.UpfApiRoot,
+		upfRequest,
+	)
+	if upfProblem != nil {
+		logger.SBILog.WithFields(logrusFieldsForUpfSubscribe(nsmfSubId, state, target, upfLocation, upfStatus)).
+			WithField("http_status", int(upfProblem.Status)).
+			Warn(upfProblem.Detail)
+		c.Set(sbi.IN_PB_DETAILS_CTX_STR, http.StatusText(int(upfProblem.Status)))
+		c.JSON(int(upfProblem.Status), upfProblem)
+		return
+	}
+
 	// Generate a subscription ID that can be used as a URI path segment.
 	// The ID is stored verbatim and echoed in the Location header.
-	state.SubId = uuid.NewString()
+	state.SubId = nsmfSubId
 	state.CreatedAt = time.Now().UTC()
+	state.RepPeriod = repPeriod
+	state.UeIpAddress = target.UeIpAddress.String()
+	state.SelectedUpfApiRoot = target.UpfApiRoot
+	state.UpfSubscriptionLocation = upfLocation
+	state.UpfSubscriptionId = extractUpfSubscriptionId(upfLocation)
 
 	// Persist in memory to support DELETE in Patch 1 and future UPF cascading.
 	// This is process-local and will be replaced by more durable state if needed.
@@ -143,7 +222,7 @@ func (s *Server) HTTPCreateIndividualSubcription(c *gin.Context) {
 		NotifId:     state.NotifId,
 		NotifUri:    state.NotifUri,
 		NotifMethod: models.SmfEventExposureNotificationMethod(request.NotifMethod),
-		RepPeriod:   request.RepPeriod,
+		RepPeriod:   state.RepPeriod,
 		EventSubs: []models.SmfEventExposureEventSubscription{
 			{Event: models.SmfEvent(nsmfUpfEventName)},
 		},
@@ -153,6 +232,10 @@ func (s *Server) HTTPCreateIndividualSubcription(c *gin.Context) {
 	location := buildEventExposureLocation(c, state.SubId)
 	c.Header("Location", location)
 	c.JSON(http.StatusCreated, response)
+
+	logger.SBILog.WithFields(logrusFieldsForUpfSubscribe(nsmfSubId, state, target, upfLocation, upfStatus)).
+		WithField("http_status", upfStatus).
+		Info("UPF subscription created")
 
 	logger.SBILog.WithFields(logrusFieldsForCreate(&request, state.SubId, state)).
 		WithField("http_status", http.StatusCreated).
@@ -250,19 +333,19 @@ func validateNsmfEventExposureCreate(
 				invalidParams,
 				invalidParam(
 					fmt.Sprintf("/eventSubs/%d/upfEvents", idx),
-					"upfEvents must include USER_DATA_USAGE_MEASURES",
+					fmt.Sprintf("upfEvents must include %s", upfEventUsageMeasures),
 				),
 			)
 			continue
 		}
 		for upfIdx := range sub.UpfEvents {
 			upfEvent := &sub.UpfEvents[upfIdx]
-			if upfEvent.Type != "USER_DATA_USAGE_MEASURES" {
+			if upfEvent.Type != upfEventUsageMeasures {
 				invalidParams = append(
 					invalidParams,
 					invalidParam(
 						fmt.Sprintf("/eventSubs/%d/upfEvents/%d/type", idx, upfIdx),
-						"type must be USER_DATA_USAGE_MEASURES",
+						fmt.Sprintf("type must be %s", upfEventUsageMeasures),
 					),
 				)
 				continue
@@ -297,15 +380,15 @@ func validateNsmfEventExposureCreate(
 					invalidParams,
 					invalidParam(
 						fmt.Sprintf("/eventSubs/%d/upfEvents/%d/granularityOfMeasurement", idx, upfIdx),
-						"granularityOfMeasurement is required (PER_SESSION expected)",
+						fmt.Sprintf("granularityOfMeasurement is required (%s expected)", upfEventGranularityPerSession),
 					),
 				)
-			} else if upfEvent.GranularityOfMeasurement != "PER_SESSION" {
+			} else if upfEvent.GranularityOfMeasurement != upfEventGranularityPerSession {
 				invalidParams = append(
 					invalidParams,
 					invalidParam(
 						fmt.Sprintf("/eventSubs/%d/upfEvents/%d/granularityOfMeasurement", idx, upfIdx),
-						"granularityOfMeasurement must be PER_SESSION",
+						fmt.Sprintf("granularityOfMeasurement must be %s", upfEventGranularityPerSession),
 					),
 				)
 			}
@@ -424,4 +507,87 @@ func requestBundledEventNotifyUri(request *nsmfEventExposureCreateRequest) strin
 		}
 	}
 	return ""
+}
+
+func logrusFieldsForResolver(
+	supi string,
+	resolveErr error,
+	target *smf_context.UpfEventExposureTarget,
+) logrus.Fields {
+	// Include resolved target details only when available.
+	fields := logrus.Fields{
+		"supi": supi,
+	}
+	if resolveErr != nil {
+		fields["resolve_error"] = resolveErr.Error()
+	}
+	if target != nil {
+		fields["ue_ip_address"] = target.UeIpAddress.String()
+		fields["selected_upf"] = target.SelectedUpf.Name
+		fields["selected_upf_api_root"] = target.UpfApiRoot
+	}
+	return fields
+}
+
+func logrusFieldsForUpfSubscribe(
+	nsmfSubId string,
+	state *smf_context.NsmfEventExposureSubscriptionState,
+	target *smf_context.UpfEventExposureTarget,
+	upfLocation string,
+	upfStatus int,
+) logrus.Fields {
+	// Include subscription state and resolved target details for full traceability.
+	fields := logrus.Fields{
+		"nsmf_sub_id":   nsmfSubId,
+		"notif_id":      "",
+		"ue_ip_address": "",
+		"upf_location":  upfLocation,
+		"upf_status":    upfStatus,
+	}
+	if state != nil {
+		fields["notif_id"] = state.NotifId
+	}
+	if target != nil {
+		fields["ue_ip_address"] = target.UeIpAddress.String()
+		fields["selected_upf"] = target.SelectedUpf.Name
+		fields["selected_upf_api_root"] = target.UpfApiRoot
+	}
+	return fields
+}
+
+func mapResolverErrorToProblemDetails(err error) *models.ProblemDetails {
+	// Map known resolver errors to specific ProblemDetails; unknown errors map to 500.
+	switch err {
+	case smf_context.ErrNoActiveSession:
+		return openapi.ProblemDetailsDataNotFound("no active session for supi")
+	case smf_context.ErrMultipleSessions:
+		return &models.ProblemDetails{
+			Title:  "Conflict",
+			Status: http.StatusConflict,
+			Detail: "multiple active sessions for supi",
+			Cause:  "MULTIPLE_SESSIONS",
+		}
+	case smf_context.ErrNoUeIpAddress:
+		return openapi.ProblemDetailsDataNotFound("ue ip address is not available")
+	case smf_context.ErrNoSelectedUpf:
+		return openapi.ProblemDetailsDataNotFound("selected upf is not available")
+	case smf_context.ErrNoUpfEventApiRoot:
+		return problemDetailsSystemFailure("upf event exposure apiRoot is not configured")
+	default:
+		return problemDetailsSystemFailure("failed to resolve upf event exposure target")
+	}
+}
+
+func extractUpfSubscriptionId(location string) string {
+	// Extract the UPF subscription ID from the Location header by taking the last path segment.
+	location = strings.TrimSpace(location)
+	if location == "" {
+		return ""
+	}
+	trimmed := strings.TrimRight(location, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
 }

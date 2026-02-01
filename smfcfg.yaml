@@ -68,6 +68,8 @@ configuration:
         type: UPF # the type of the node (AN or UPF)
         nodeID: 192.168.105.10 # the Node ID of this UPF
         addr: 192.168.105.10 # the IP/FQDN of N4 interface on this UPF (PFCP)
+        # Nupf_EventExposure API root for this UPF (Task2 Patch 2)
+        nupfEeApiRoot: http://192.168.107.5:8080
         sNssaiUpfInfos: # S-NSSAI information list for this UPF
           - sNssai: # S-NSSAI (Single Network Slice Selection Assistance Information)
               sst: 1 # Slice/Service Type (uinteger, range: 0~255)
@@ -107,6 +109,14 @@ configuration:
   urrPeriod: 10 # default usage report period in seconds
   urrThreshold: 1000 # default usage report threshold in bytes
   requestedUnit: 1000
+
+  # Optional: Nupf_EventExposure client settings (Task2 Patch 2)
+  # If nupfEeNfId is omitted, SMF nfInstanceId is used.
+  nupfEeNfId: "550e8400-e29b-41d4-a716-446655440000"
+  # Request timeout for UPF Nupf_EventExposure HTTP call.
+  nupfEeReqTimeout: 5s
+  # Max retry count for transient UPF errors.
+  nupfEeMaxRetries: 1
 logger: # log output setting
   enable: true # true or false
   level: debug # how detailed to output, value: trace, debug, info, warn, error, fatal, panic

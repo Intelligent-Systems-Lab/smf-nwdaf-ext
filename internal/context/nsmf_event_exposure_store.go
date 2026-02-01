@@ -15,18 +15,22 @@ import (
 // NsmfEventExposureSubscriptionState stores the validated subscription data that
 // the SMF needs to keep for lifecycle management (create/delete) in memory.
 type NsmfEventExposureSubscriptionState struct {
-	SubId                 string
-	Supi                  string
-	NotifId               string
-	NotifUri              string
-	RepPeriod             int32
-	NotifMethod           string
-	MeasurementTypes      []string
-	GranularityOfMeasure  string
-	BundledEventNotifyUri string
-	UpfEventType          string
-	SmfEventType          string
-	CreatedAt             time.Time
+	SubId                   string
+	Supi                    string
+	NotifId                 string
+	NotifUri                string
+	RepPeriod               int32
+	NotifMethod             string
+	MeasurementTypes        []string
+	GranularityOfMeasure    string
+	BundledEventNotifyUri   string
+	UpfEventType            string
+	SmfEventType            string
+	UeIpAddress             string
+	SelectedUpfApiRoot      string
+	UpfSubscriptionId       string
+	UpfSubscriptionLocation string
+	CreatedAt               time.Time
 }
 
 type nsmfEventExposureStore struct {

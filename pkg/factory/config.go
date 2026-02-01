@@ -105,6 +105,9 @@ type Configuration struct {
 	T3592                *TimerValue          `yaml:"t3592" valid:"required"`
 	NwInstFqdnEncoding   bool                 `yaml:"nwInstFqdnEncoding" valid:"type(bool),optional"`
 	RequestedUnit        int32                `yaml:"requestedUnit,omitempty" valid:"optional"`
+	NupfEeNfId           string               `yaml:"nupfEeNfId,omitempty" valid:"optional,uuidv4"`
+	NupfEeReqTimeout     time.Duration        `yaml:"nupfEeReqTimeout,omitempty" valid:"type(time.Duration),optional"`
+	NupfEeMaxRetries     int                  `yaml:"nupfEeMaxRetries,omitempty" valid:"optional"`
 }
 
 type Logger struct {
@@ -565,6 +568,7 @@ type UPNode struct {
 	Addr                 string                  `json:"addr" yaml:"addr" valid:"host,optional"`
 	ANIP                 string                  `json:"anIP" yaml:"anIP" valid:"host,optional"`
 	Dnn                  string                  `json:"dnn" yaml:"dnn" valid:"type(string),minstringlength(1),optional"`
+	NupfEeApiRoot        string                  `yaml:"nupfEeApiRoot,omitempty" valid:"url,optional"`
 	SNssaiInfos          []*SnssaiUpfInfoItem    `json:"sNssaiUpfInfos" yaml:"sNssaiUpfInfos,omitempty" valid:"optional"`
 	InterfaceUpfInfoList []*InterfaceUpfInfoItem `json:"interfaces" yaml:"interfaces,omitempty" valid:"optional"`
 }

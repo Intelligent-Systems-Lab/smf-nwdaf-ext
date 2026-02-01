@@ -43,7 +43,7 @@ This document is the concrete implementation plan for Task2 (NWDAF -> SMF -> UPF
    - Use `smContext.SelectedUPF` (must be non-nil). This already represents the selected anchor UPF from `SelectUPFAndAllocUEIP()`.
 
 5) **Resolve NUPF apiRoot:**
-   - **Proposed config-based mapping**: extend UPF config in `smf/smfcfg.yaml` to include `nupfEventExposureApiRoot` per UPF node.
+   - **Proposed config-based mapping**: extend UPF config in `smf/smfcfg.yaml` to include `nupfEeApiRoot` per UPF node.
    - Attach this apiRoot to the runtime UPF/UPNode object during `InitSmfContext`, so it can be read from `smContext.SelectedUPF`.
    - If apiRoot is missing, reject with a 500 (configuration error) or 502 (upstream not available), depending on error strategy.
 

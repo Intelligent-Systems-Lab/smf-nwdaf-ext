@@ -6,6 +6,7 @@ import (
 	"net"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/free5gc/openapi/models"
@@ -36,13 +37,14 @@ const (
 
 // UPNode represent the user plane node topology
 type UPNode struct {
-	Name   string
-	Type   UPNodeType
-	NodeID pfcpType.NodeID
-	ANIP   net.IP
-	Dnn    string
-	Links  []*UPNode
-	UPF    *UPF
+	Name          string
+	Type          UPNodeType
+	NodeID        pfcpType.NodeID
+	ANIP          net.IP
+	Dnn           string
+	Links         []*UPNode
+	UPF           *UPF
+	NupfEeApiRoot string
 }
 
 func (u *UPNode) MatchedSelection(selection *UPFSelectionParams) bool {
@@ -126,6 +128,7 @@ func NewUserPlaneInformation(upTopology *factory.UserPlaneInformation) *UserPlan
 
 			upNode.UPF = NewUPF(&upNode.NodeID, node.InterfaceUpfInfoList)
 			upNode.UPF.Addr = node.Addr
+			upNode.NupfEeApiRoot = strings.TrimSpace(node.NupfEeApiRoot)
 			snssaiInfos := make([]*SnssaiUPFInfo, 0)
 			for _, snssaiInfoConfig := range node.SNssaiInfos {
 				snssaiInfo := SnssaiUPFInfo{
@@ -249,6 +252,7 @@ func (upi *UserPlaneInformation) UpNodesToConfiguration() map[string]*factory.UP
 		if nodeIDtoIp != nil {
 			u.NodeID = nodeIDtoIp.String()
 		}
+		u.NupfEeApiRoot = upNode.NupfEeApiRoot
 		if upNode.UPF != nil {
 			if upNode.UPF.SNssaiInfos != nil {
 				FsNssaiInfoList := make([]*factory.SnssaiUpfInfoItem, 0)
