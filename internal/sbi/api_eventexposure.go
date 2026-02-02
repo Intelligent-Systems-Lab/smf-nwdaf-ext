@@ -84,6 +84,12 @@ const (
 func (s *Server) getEventExposureRoutes() []Route {
 	// The routes are registered on startup via server.go when the service name
 	// list includes nsmf-event-exposure; no manual trigger is required.
+	// With SmfEventExposureResUriPrefix set to "/nsmf-event-exposure/v1/subscriptions",
+	// these patterns map to:
+	// - POST   /nsmf-event-exposure/v1/subscriptions
+	// - GET    /nsmf-event-exposure/v1/subscriptions/:subId
+	// - DELETE /nsmf-event-exposure/v1/subscriptions/:subId
+	// - PUT    /nsmf-event-exposure/v1/subscriptions/:subId
 	return []Route{
 		{
 			Name:    "Index",
@@ -96,25 +102,25 @@ func (s *Server) getEventExposureRoutes() []Route {
 		{
 			Name:    "CreateIndividualSubcription",
 			Method:  http.MethodPost,
-			Pattern: "/subscriptions",
+			Pattern: "/",
 			APIFunc: s.HTTPCreateIndividualSubcription,
 		},
 		{
 			Name:    "DeleteIndividualSubcription",
 			Method:  http.MethodDelete,
-			Pattern: "/subscriptions/:subId",
+			Pattern: "/:subId",
 			APIFunc: s.HTTPDeleteIndividualSubcription,
 		},
 		{
 			Name:    "GetIndividualSubcription",
 			Method:  http.MethodGet,
-			Pattern: "/subscriptions/:subId",
+			Pattern: "/:subId",
 			APIFunc: s.HTTPGetIndividualSubcription,
 		},
 		{
 			Name:    "ReplaceIndividualSubcription",
 			Method:  http.MethodPut,
-			Pattern: "/subscriptions/:subId",
+			Pattern: "/:subId",
 			APIFunc: s.HTTPReplaceIndividualSubcription,
 		},
 	}
