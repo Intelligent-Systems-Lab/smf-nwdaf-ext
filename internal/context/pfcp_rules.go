@@ -70,8 +70,10 @@ func NewMeasurementPeriod(time time.Duration) UrrOpt {
 
 func NewVolumeThreshold(threshold uint64) UrrOpt {
 	return func(urr *URR) {
-		urr.ReportingTrigger.Volth = true
-		urr.VolumeThreshold = threshold
+		if threshold > 0 {
+			urr.ReportingTrigger.Volth = true
+			urr.VolumeThreshold = threshold
+		}
 	}
 }
 
