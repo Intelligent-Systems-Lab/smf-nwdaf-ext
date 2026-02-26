@@ -330,24 +330,43 @@ func (upi *UserPlaneInformation) UpNodesToConfiguration() map[string]*factory.UP
 
 func (upi *UserPlaneInformation) LinksToConfiguration() []*factory.UPLink {
 	links := make([]*factory.UPLink, 0)
-	source, err := upi.selectUPPathSource()
+	sources, err := upi.selectUPPathSources()
 	if err != nil {
 		logger.InitLog.Errorf("AN Node not found\n")
-	} else {
-		visited := make(map[*UPNode]bool)
+		return links
+	}
+
+	visited := make(map[*UPNode]bool)
+	edgeSet := make(map[string]struct{})
+	for _, source := range sources {
+		if visited[source] {
+			continue
+		}
+
 		queue := make([]*UPNode, 0)
 		queue = append(queue, source)
 		for {
 			node := queue[0]
 			queue = queue[1:]
+			if visited[node] {
+				if len(queue) == 0 {
+					break
+				}
+				continue
+			}
 			visited[node] = true
 			for _, link := range node.Links {
 				if !visited[link] {
 					queue = append(queue, link)
-					nodeIpStr := node.NodeID.ResolveNodeIdToIp().String()
-					ipStr := link.NodeID.ResolveNodeIdToIp().String()
-					linkA := upi.UPFIPToName[nodeIpStr]
-					linkB := upi.UPFIPToName[ipStr]
+					linkA, linkB := node.Name, link.Name
+					edgeKey := linkA + "<->" + linkB
+					if linkA > linkB {
+						edgeKey = linkB + "<->" + linkA
+					}
+					if _, exists := edgeSet[edgeKey]; exists {
+						continue
+					}
+					edgeSet[edgeKey] = struct{}{}
 					links = append(links, &factory.UPLink{
 						A: linkA,
 						B: linkB,
@@ -674,30 +693,33 @@ func (upi *UserPlaneInformation) GenerateDefaultPath(selection *UPFSelectionPara
 		logger.CtxLog.Tracef("=================================")
 	}
 
+	sources, err := upi.selectUPPathSources()
+	if err != nil {
+		logger.CtxLog.Errorf("%v", err)
+		return false
+	}
+
 	// Run DFS
-	for _, node := range upi.AccessNetwork {
+	for _, node := range sources {
 		visited := make(map[*UPNode]bool)
 		for _, upNode := range upi.UPNodes {
 			visited[upNode] = false
 		}
 
-		if node.Type == UPNODE_AN {
-			source = node
-			path, pathExist = getPathBetween(source, destinations[0], visited, selection)
-
-			if pathExist {
-				if path[0].Type == UPNODE_AN {
-					path = path[1:]
-				}
-				upi.DefaultUserPlanePath[selection.String()] = path
-				break
-			}
+		if node.Type != UPNODE_AN {
+			continue
 		}
-	}
 
-	if source == nil {
-		logger.CtxLog.Errorf("There is no AN Node in config file!")
-		return false
+		source = node
+		path, pathExist = getPathBetween(source, destinations[0], visited, selection)
+
+		if pathExist {
+			if path[0].Type == UPNODE_AN {
+				path = path[1:]
+			}
+			upi.DefaultUserPlanePath[selection.String()] = path
+			break
+		}
 	}
 
 	if pathExist {
@@ -716,36 +738,45 @@ func (upi *UserPlaneInformation) GenerateDefaultPath(selection *UPFSelectionPara
 func (upi *UserPlaneInformation) GenerateDefaultPathToUPF(selection *UPFSelectionParams, destination *UPNode) bool {
 	var source *UPNode
 
-	for _, node := range upi.AccessNetwork {
-		if node.Type == UPNODE_AN {
-			source = node
+	sources, err := upi.selectUPPathSources()
+	if err != nil {
+		logger.CtxLog.Errorf("%v", err)
+		return false
+	}
+
+	// Run DFS from each AN, until a reachable source is found.
+	var (
+		path      []*UPNode
+		pathExist bool
+	)
+	for _, node := range sources {
+		if node.Type != UPNODE_AN {
+			continue
+		}
+
+		visited := make(map[*UPNode]bool)
+		for _, upNode := range upi.UPNodes {
+			visited[upNode] = false
+		}
+
+		source = node
+		path, pathExist = getPathBetween(source, destination, visited, selection)
+		if pathExist {
+			if path[0].Type == UPNODE_AN {
+				path = path[1:]
+			}
 			break
 		}
 	}
 
-	if source == nil {
-		logger.CtxLog.Errorf("There is no AN Node in config file!")
+	if !pathExist {
 		return false
 	}
 
-	// Run DFS
-	visited := make(map[*UPNode]bool)
-
-	for _, upNode := range upi.UPNodes {
-		visited[upNode] = false
+	if upi.DefaultUserPlanePathToUPF[selection.String()] == nil {
+		upi.DefaultUserPlanePathToUPF[selection.String()] = make(map[string][]*UPNode)
 	}
-
-	path, pathExist := getPathBetween(source, destination, visited, selection)
-
-	if pathExist {
-		if path[0].Type == UPNODE_AN {
-			path = path[1:]
-		}
-		if upi.DefaultUserPlanePathToUPF[selection.String()] == nil {
-			upi.DefaultUserPlanePathToUPF[selection.String()] = make(map[string][]*UPNode)
-		}
-		upi.DefaultUserPlanePathToUPF[selection.String()][destination.NodeID.ResolveNodeIdToIp().String()] = path
-	}
+	upi.DefaultUserPlanePathToUPF[selection.String()][destination.NodeID.ResolveNodeIdToIp().String()] = path
 
 	return pathExist
 }
@@ -865,23 +896,46 @@ func (upi *UserPlaneInformation) sortUPFListByName(upfList []*UPNode) []*UPNode 
 	return sortedUpList
 }
 
-func (upi *UserPlaneInformation) selectUPPathSource() (*UPNode, error) {
-	// if multiple gNBs exist, select one according to some criterion
-	for _, node := range upi.AccessNetwork {
+func (upi *UserPlaneInformation) selectUPPathSources() ([]*UPNode, error) {
+	if len(upi.AccessNetwork) == 0 {
+		return nil, errors.New("AN Node not found")
+	}
+
+	names := make([]string, 0, len(upi.AccessNetwork))
+	for name, node := range upi.AccessNetwork {
 		if node.Type == UPNODE_AN {
-			return node, nil
+			names = append(names, name)
 		}
 	}
-	return nil, errors.New("AN Node not found")
+	if len(names) == 0 {
+		return nil, errors.New("AN Node not found")
+	}
+
+	sort.Strings(names)
+	sources := make([]*UPNode, 0, len(names))
+	for _, name := range names {
+		sources = append(sources, upi.AccessNetwork[name])
+	}
+	return sources, nil
 }
 
 // SelectUPFAndAllocUEIP will return anchor UPF, allocated UE IP and use/not use static IP
 func (upi *UserPlaneInformation) SelectUPFAndAllocUEIP(selection *UPFSelectionParams) (*UPNode, net.IP, bool) {
-	source, err := upi.selectUPPathSource()
+	sources, err := upi.selectUPPathSources()
 	if err != nil {
 		return nil, nil, false
 	}
-	UPFList := upi.selectAnchorUPF(source, selection)
+
+	upfSet := make(map[string]*UPNode)
+	for _, source := range sources {
+		for _, upf := range upi.selectAnchorUPF(source, selection) {
+			upfSet[upf.Name] = upf
+		}
+	}
+	UPFList := make([]*UPNode, 0, len(upfSet))
+	for _, upf := range upfSet {
+		UPFList = append(UPFList, upf)
+	}
 	logger.CtxLog.Debug("UPFList: ", UPFList)
 	listLength := len(UPFList)
 	if listLength == 0 {

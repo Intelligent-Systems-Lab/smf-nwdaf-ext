@@ -287,6 +287,103 @@ func TestSelectUPFAndAllocUEIP(t *testing.T) {
 	}
 }
 
+var multiANSelectionConfig = &factory.UserPlaneInformation{
+	UPNodes: map[string]*factory.UPNode{
+		"gNB1": {
+			Type: "AN",
+			ANIP: "192.168.103.20",
+		},
+		"gNB2": {
+			Type: "AN",
+			ANIP: "192.168.103.21",
+		},
+		"UPF-EES": {
+			Type:   "UPF",
+			NodeID: "192.168.105.10",
+			SNssaiInfos: []*factory.SnssaiUpfInfoItem{
+				{
+					SNssai: &models.Snssai{
+						Sst: 1,
+						Sd:  "010203",
+					},
+					DnnUpfInfoList: []*factory.DnnUpfInfoItem{
+						{
+							Dnn: "internet",
+							Pools: []*factory.UEIPPool{
+								{
+									Cidr: "10.10.0.0/24",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"UPF-EES2": {
+			Type:   "UPF",
+			NodeID: "192.168.105.11",
+			SNssaiInfos: []*factory.SnssaiUpfInfoItem{
+				{
+					SNssai: &models.Snssai{
+						Sst: 1,
+						Sd:  "112233",
+					},
+					DnnUpfInfoList: []*factory.DnnUpfInfoItem{
+						{
+							Dnn: "internet",
+							Pools: []*factory.UEIPPool{
+								{
+									Cidr: "10.100.0.0/24",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	},
+	Links: []*factory.UPLink{
+		{
+			A: "gNB1",
+			B: "UPF-EES",
+		},
+		{
+			A: "gNB2",
+			B: "UPF-EES2",
+		},
+	},
+}
+
+func TestSelectUPFAndAllocUEIP_MultiANDisconnected(t *testing.T) {
+	userplaneInformation := smf_context.NewUserPlaneInformation(multiANSelectionConfig)
+	for _, upf := range userplaneInformation.UPFs {
+		upf.UPF.AssociationContext = context.Background()
+	}
+
+	param := &smf_context.UPFSelectionParams{
+		Dnn: "internet",
+		SNssai: &smf_context.SNssai{
+			Sst: 1,
+			Sd:  "112233",
+		},
+	}
+
+	for i := 0; i < 100; i++ {
+		upf, allocatedIP, _ := userplaneInformation.SelectUPFAndAllocUEIP(param)
+		require.NotNil(t, upf)
+		require.Equal(t, "UPF-EES2", upf.Name)
+		require.NotNil(t, allocatedIP)
+		require.Equal(t, byte(10), allocatedIP.To4()[0])
+		require.Equal(t, byte(100), allocatedIP.To4()[1])
+		userplaneInformation.ReleaseUEIP(upf, allocatedIP, false)
+	}
+
+	defaultPath := userplaneInformation.GetDefaultUserPlanePathByDNNAndUPF(param, userplaneInformation.UPFs["UPF-EES2"])
+	require.NotNil(t, defaultPath)
+	require.NotEmpty(t, defaultPath)
+	require.Equal(t, "UPF-EES2", defaultPath[len(defaultPath)-1].Name)
+}
+
 var configForIPPoolAllocate = &factory.UserPlaneInformation{
 	UPNodes: map[string]*factory.UPNode{
 		"GNodeB": {
