@@ -32,6 +32,7 @@ Quick checks:
 On create:
 - SMF should call UPF create endpoint using configured `nupfEeApiRoot`.
 - Local Nsmf state should include returned UPF `Location`/ID.
+- Expected target is one UPF per subscription (the resolved `SelectedUPF`).
 
 On delete:
 - SMF should attempt UPF delete before local cleanup.
@@ -81,12 +82,22 @@ Action:
 - verify UPF returns `201` + `Location` on create.
 - adjust timeout/retry in SMF config.
 
+### Expected two subscriptions in `AN -> I-UPF -> PSA-UPF` but only one appears
+
+Cause:
+- current branch resolves one target (`SelectedUPF`) and does not fan out to multiple UPFs.
+
+Action:
+- treat this as current design limitation, not runtime error.
+- if multi-UPF subscriptions are required, implementation must be extended.
+
 ## Multi-AN Topology Notes
 
 If session establishment reports UPF selection failures under multi-gNB setups:
 - verify AN-UPF links are defined correctly.
 - verify selected S-NSSAI/DNN exists on reachable UPF.
 - ensure this branch build includes multi-AN ingress selection fix.
+- note that multi-AN support here does not imply multi-UPF subscription fan-out on one path.
 
 ## URR Threshold Note
 

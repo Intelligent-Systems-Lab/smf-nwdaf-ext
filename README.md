@@ -43,6 +43,7 @@ Implemented behavior:
 Current non-goals in this branch:
 - GET/PUT subscription management remain unsupported.
 - No persistence backend (store is process-local memory).
+- Per-subscription multi-UPF targeting is unsupported; SMF subscribes only the resolved `SelectedUPF`.
 
 ### 2) Nupf Event Exposure Client
 

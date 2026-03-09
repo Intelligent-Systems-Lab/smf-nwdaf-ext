@@ -48,6 +48,17 @@ URR threshold guard:
 
 Key invariant:
 - local subscription state is not persisted before UPF create success.
+- only one UPF target is used per subscription (`SelectedUPF`).
+
+### Current Topology Limitation
+
+Current behavior:
+- SMF resolves a single target via `SMContext.SelectedUPF`.
+- subscription cascade is sent only to that one UPF.
+
+Implication:
+- in a chained path such as `AN -> I-UPF -> PSA-UPF`, this branch does not subscribe both UPFs.
+- multi-UPF fan-out/coordination is not implemented in current scope.
 
 ### Delete (`DELETE /subscriptions/{subId}`)
 
@@ -100,3 +111,4 @@ If future scope expands:
 - add persistence backend for subscription state
 - support additional event and filter variants
 - add richer resolver keys when SUPI has multiple active contexts by design
+- add multi-UPF subscription targeting for chained data paths

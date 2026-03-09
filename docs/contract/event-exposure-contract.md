@@ -42,6 +42,7 @@ State behavior:
 - SMF resolves SUPI -> SMContext -> UE IP + selected UPF apiRoot first
 - SMF calls UPF create subscription
 - SMF stores local subscription state only after UPF create succeeds
+- UPF target is single-valued per subscription (resolved from `SMContext.SelectedUPF`)
 
 ### Delete Subscription
 
@@ -64,6 +65,7 @@ Mapping rules:
 - Nsmf `bundledEventNotifyUri` -> UPF `eventNotifyUri`
 - SUPI-resolved UE IP -> UPF `ueIpAddress`
 - event type fixed to `USER_DATA_USAGE_MEASURES` in current branch scope
+- current target selection uses only `SelectedUPF`; no fan-out to multiple UPFs on one path
 
 Reporting mode:
 - trigger fixed to `PERIODIC`
@@ -88,6 +90,7 @@ Per-UPF node configuration:
 - full event catalog beyond branch-fixed UPF usage event flow
 - persistent subscription storage backend
 - full GET/PUT lifecycle semantics
+- multi-target subscription in chained topologies (for example `AN -> I-UPF -> PSA-UPF`)
 
 ## Reference Specs
 

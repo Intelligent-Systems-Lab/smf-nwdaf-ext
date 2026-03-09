@@ -32,3 +32,8 @@ Covers:
 - `docs/spec/TS29508_Nsmf_EventExposure.yaml`
 - `docs/spec/TS29564_Nupf_EventExposure.yaml`
 - `docs/spec/TS29571_CommonData.yaml`
+
+## Branch Limitation
+
+- Current branch behavior uses one resolved UPF target per subscription (`SelectedUPF`).
+- Multi-UPF subscription fan-out on one chained path (for example `AN -> I-UPF -> PSA-UPF`) is out of scope.
