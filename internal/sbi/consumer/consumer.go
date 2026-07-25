@@ -1,6 +1,8 @@
 package consumer
 
 import (
+	"net/http"
+
 	"github.com/free5gc/openapi/amf/Communication"
 	"github.com/free5gc/openapi/chf/ConvergedCharging"
 	"github.com/free5gc/openapi/nrf/NFDiscovery"
@@ -9,7 +11,6 @@ import (
 	"github.com/free5gc/openapi/smf/PDUSession"
 	"github.com/free5gc/openapi/udm/SubscriberDataManagement"
 	"github.com/free5gc/openapi/udm/UEContextManagement"
-	NupfEventExposure "github.com/free5gc/openapi/upf/EventExposure"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/pkg/app"
 )
@@ -71,7 +72,7 @@ func NewConsumer(smf app.App) (*Consumer, error) {
 
 	c.nupfEventExposureService = &nupfEventExposureService{
 		consumer:                    c,
-		EventExposureClients:        make(map[string]*NupfEventExposure.APIClient),
+		EventExposureClients:        make(map[string]*http.Client),
 		EventExposureCreateRequests: make(map[string]string),
 	}
 

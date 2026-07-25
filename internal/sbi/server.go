@@ -130,9 +130,13 @@ func newRouter(s *Server) *gin.Engine {
 }
 
 func (s *Server) Run(traceCtx context.Context, wg *sync.WaitGroup) error {
-	err := s.Consumer().RegisterNFInstance(s.CancelContext())
-	if err != nil {
-		return err
+	if s.Config().Configuration.NrfRegistrationEnabledOrDefault() {
+		err := s.Consumer().RegisterNFInstance(s.CancelContext())
+		if err != nil {
+			return err
+		}
+	} else {
+		logger.InitLog.Info("NRF registration is disabled for configured-endpoint deployment")
 	}
 
 	wg.Add(1)

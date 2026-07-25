@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/free5gc/openapi/models"
+	"github.com/free5gc/smf/internal/compat/nupf"
 )
 
 func TestEventExposureRepositoryCopiesStoredRecords(t *testing.T) {
 	repository := NewEventExposureRepository()
 	pduSessionID := int32(0)
 	dnn := "internet"
-	measurementTypes := []models.UpfMeasurementType{models.UpfMeasurementType_VOLUME_MEASUREMENT}
+	measurementTypes := []nupf.MeasurementType{nupf.MeasurementTypeVolume}
 	ip := net.ParseIP("192.0.2.1").To4()
 
 	subscription := EventExposureSubscription{
@@ -34,7 +35,7 @@ func TestEventExposureRepositoryCopiesStoredRecords(t *testing.T) {
 
 	pduSessionID = 9
 	dnn = "mutated"
-	measurementTypes[0] = models.UpfMeasurementType_THROUGHPUT_MEASUREMENT
+	measurementTypes[0] = nupf.MeasurementTypeThroughput
 	ip[0] = 203
 	subscription.Selectors.Snssai.Sd = "ffffff"
 	subscription.Target.Snssai.Sd = "ffffff"
@@ -49,7 +50,7 @@ func TestEventExposureRepositoryCopiesStoredRecords(t *testing.T) {
 	if stored.Selectors.Dnn == nil || *stored.Selectors.Dnn != "internet" {
 		t.Fatalf("Dnn alias detected: %+v", stored.Selectors.Dnn)
 	}
-	if stored.MeasurementTypes[0] != models.UpfMeasurementType_VOLUME_MEASUREMENT {
+	if stored.MeasurementTypes[0] != nupf.MeasurementTypeVolume {
 		t.Fatalf("measurement alias detected: %v", stored.MeasurementTypes)
 	}
 	if !stored.Target.UEIPAddress.Equal(net.ParseIP("192.0.2.1")) {

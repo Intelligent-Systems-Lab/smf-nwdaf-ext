@@ -9,6 +9,8 @@ import (
 	"net/url"
 
 	"github.com/free5gc/openapi/models"
+	"github.com/free5gc/smf/internal/compat/nsmf"
+	"github.com/free5gc/smf/internal/compat/nupf"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/internal/sbi/processor"
 )
@@ -36,12 +38,13 @@ func (p *presentInt32) UnmarshalJSON(data []byte) error {
 type eventExposureCreateBody struct {
 	Supi              presentString                              `json:"supi"`
 	Gpsi              *json.RawMessage                           `json:"gpsi,omitempty"`
-	AnyUeInd          *json.RawMessage                           `json:"anyUeInd,omitempty"`
-	GroupId           *json.RawMessage                           `json:"groupId,omitempty"`
+	AnyUeInd          *bool                                      `json:"anyUeInd,omitempty"`
+	GroupId           *string                                    `json:"groupId,omitempty"`
 	PduSeId           presentInt32                               `json:"pduSeId"`
 	Dnn               presentString                              `json:"dnn"`
 	Snssai            *models.Snssai                             `json:"snssai,omitempty"`
-	SubId             *json.RawMessage                           `json:"subId,omitempty"`
+	NfId              presentString                              `json:"nfId"`
+	SubId             *string                                    `json:"subId,omitempty"`
 	NotifId           presentString                              `json:"notifId"`
 	NotifUri          presentString                              `json:"notifUri"`
 	AltNotifIpv4Addrs *json.RawMessage                           `json:"altNotifIpv4Addrs,omitempty"`
@@ -64,25 +67,22 @@ type eventExposureCreateBody struct {
 }
 
 type eventExposureEventSubscriptionBody struct {
-	Event                 models.SmfEvent             `json:"event"`
-	DnaiChgType           *json.RawMessage            `json:"dnaiChgType,omitempty"`
-	DddTraDescriptors     *json.RawMessage            `json:"dddTraDescriptors,omitempty"`
-	DddStati              *json.RawMessage            `json:"dddStati,omitempty"`
-	AppIds                *json.RawMessage            `json:"appIds,omitempty"`
-	TargetPeriod          *json.RawMessage            `json:"targetPeriod,omitempty"`
-	TransacDispInd        *json.RawMessage            `json:"transacDispInd,omitempty"`
-	TransacMetrics        *json.RawMessage            `json:"transacMetrics,omitempty"`
-	UeIpAddr              *json.RawMessage            `json:"ueIpAddr,omitempty"`
-	UpfEvents             []eventExposureUPFEventBody `json:"upfEvents"`
-	BundlingAllowed       *json.RawMessage            `json:"bundlingAllowed,omitempty"`
-	BundleId              *json.RawMessage            `json:"bundleId,omitempty"`
-	BundledEventNotifyUri presentString               `json:"bundledEventNotifyUri"`
+	Event             nsmf.Event                  `json:"event"`
+	DnaiChgType       *json.RawMessage            `json:"dnaiChgType,omitempty"`
+	DddTraDescriptors *json.RawMessage            `json:"dddTraDescriptors,omitempty"`
+	DddStati          *json.RawMessage            `json:"dddStati,omitempty"`
+	AppIds            *json.RawMessage            `json:"appIds,omitempty"`
+	TargetPeriod      *json.RawMessage            `json:"targetPeriod,omitempty"`
+	TransacDispInd    *json.RawMessage            `json:"transacDispInd,omitempty"`
+	TransacMetrics    *json.RawMessage            `json:"transacMetrics,omitempty"`
+	UeIpAddr          *json.RawMessage            `json:"ueIpAddr,omitempty"`
+	UpfEvents         []eventExposureUPFEventBody `json:"upfEvents"`
 }
 
 type eventExposureUPFEventBody struct {
-	Type                     models.UpfEventType                `json:"type"`
-	MeasurementTypes         []models.UpfMeasurementType        `json:"measurementTypes"`
-	GranularityOfMeasurement models.UpfGranularityOfMeasurement `json:"granularityOfMeasurement"`
+	Type                     nupf.EventType                `json:"type"`
+	MeasurementTypes         []nupf.MeasurementType        `json:"measurementTypes"`
+	GranularityOfMeasurement nupf.GranularityOfMeasurement `json:"granularityOfMeasurement"`
 }
 
 func decodeEventExposureCreateRequest(r io.Reader) (processor.EventExposureCreateRequest, *models.ProblemDetails) {
@@ -116,6 +116,9 @@ func validateEventExposureCreateBody(
 	if !body.NotifUri.Set || !validEventExposureCallbackURI(body.NotifUri.Value) {
 		return processor.EventExposureCreateRequest{}, malformedEventExposureProblem("/notifUri", "invalid URI")
 	}
+	if body.NfId.Set && body.NfId.Value == "" {
+		return processor.EventExposureCreateRequest{}, malformedEventExposureProblem("/nfId", "must not be empty")
+	}
 	if !body.RepPeriod.Set || body.RepPeriod.Value <= 0 {
 		return processor.EventExposureCreateRequest{}, malformedEventExposureProblem("/repPeriod", "must be positive")
 	}
@@ -138,13 +141,9 @@ func validateEventExposureCreateBody(
 		return processor.EventExposureCreateRequest{}, malformedEventExposureProblem(
 			"/eventSubs/0/"+field, "unsupported field")
 	}
-	if eventSub.Event != models.SmfEvent_UPF_EVENT {
+	if eventSub.Event != nsmf.EventUPFEvent {
 		return processor.EventExposureCreateRequest{}, malformedEventExposureProblem(
 			"/eventSubs/0/event", "unsupported value")
-	}
-	if !eventSub.BundledEventNotifyUri.Set || !validEventExposureCallbackURI(eventSub.BundledEventNotifyUri.Value) {
-		return processor.EventExposureCreateRequest{}, malformedEventExposureProblem(
-			"/eventSubs/0/bundledEventNotifyUri", "invalid URI")
 	}
 	if len(eventSub.UpfEvents) != 1 {
 		return processor.EventExposureCreateRequest{}, malformedEventExposureProblem(
@@ -152,7 +151,7 @@ func validateEventExposureCreateBody(
 	}
 
 	upfEvent := eventSub.UpfEvents[0]
-	if upfEvent.Type != models.UpfEventType_USER_DATA_USAGE_MEASURES {
+	if upfEvent.Type != nupf.EventTypeUserDataUsageMeasures {
 		return processor.EventExposureCreateRequest{}, malformedEventExposureProblem(
 			"/eventSubs/0/upfEvents/0/type", "unsupported value")
 	}
@@ -161,13 +160,13 @@ func validateEventExposureCreateBody(
 			"/eventSubs/0/upfEvents/0/measurementTypes", "required")
 	}
 	for i, measurementType := range upfEvent.MeasurementTypes {
-		if measurementType != models.UpfMeasurementType_VOLUME_MEASUREMENT &&
-			measurementType != models.UpfMeasurementType_THROUGHPUT_MEASUREMENT {
+		if measurementType != nupf.MeasurementTypeVolume &&
+			measurementType != nupf.MeasurementTypeThroughput {
 			return processor.EventExposureCreateRequest{}, malformedEventExposureProblem(
 				fmt.Sprintf("/eventSubs/0/upfEvents/0/measurementTypes/%d", i), "unsupported value")
 		}
 	}
-	if upfEvent.GranularityOfMeasurement != models.UpfGranularityOfMeasurement_PER_SESSION {
+	if upfEvent.GranularityOfMeasurement != nupf.GranularityPerSession {
 		return processor.EventExposureCreateRequest{}, malformedEventExposureProblem(
 			"/eventSubs/0/upfEvents/0/granularityOfMeasurement", "unsupported value")
 	}
@@ -186,13 +185,13 @@ func validateEventExposureCreateBody(
 	}
 
 	return processor.EventExposureCreateRequest{
-		Supi:                  body.Supi.Value,
-		Selectors:             selectors,
-		NotifID:               body.NotifId.Value,
-		NotifURI:              body.NotifUri.Value,
-		BundledEventNotifyURI: eventSub.BundledEventNotifyUri.Value,
-		MeasurementTypes:      append([]models.UpfMeasurementType(nil), upfEvent.MeasurementTypes...),
-		ReportingPeriod:       body.RepPeriod.Value,
+		Supi:             body.Supi.Value,
+		Selectors:        selectors,
+		NFID:             body.NfId.Value,
+		NotifID:          body.NotifId.Value,
+		NotifURI:         body.NotifUri.Value,
+		MeasurementTypes: append([]nupf.MeasurementType(nil), upfEvent.MeasurementTypes...),
+		ReportingPeriod:  body.RepPeriod.Value,
 	}, nil
 }
 
@@ -200,11 +199,11 @@ func unsupportedTopLevelField(body eventExposureCreateBody) string {
 	switch {
 	case body.Gpsi != nil:
 		return "gpsi"
-	case body.AnyUeInd != nil:
+	case body.AnyUeInd != nil && *body.AnyUeInd:
 		return "anyUeInd"
-	case body.GroupId != nil:
+	case body.GroupId != nil && *body.GroupId != "":
 		return "groupId"
-	case body.SubId != nil:
+	case body.SubId != nil && *body.SubId != "":
 		return "subId"
 	case body.AltNotifIpv4Addrs != nil:
 		return "altNotifIpv4Addrs"
@@ -257,10 +256,6 @@ func unsupportedEventField(event eventExposureEventSubscriptionBody) string {
 		return "transacMetrics"
 	case event.UeIpAddr != nil:
 		return "ueIpAddr"
-	case event.BundlingAllowed != nil:
-		return "bundlingAllowed"
-	case event.BundleId != nil:
-		return "bundleId"
 	default:
 		return ""
 	}

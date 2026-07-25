@@ -16,6 +16,8 @@ import (
 
 	"github.com/free5gc/openapi"
 	"github.com/free5gc/openapi/models"
+	"github.com/free5gc/smf/internal/compat/nsmf"
+	"github.com/free5gc/smf/internal/compat/nupf"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/pkg/factory"
 )
@@ -97,24 +99,24 @@ func (s *Server) HTTPReplaceIndividualSubcription(c *gin.Context) {
 	c.JSON(int(problemDetails.Status), problemDetails)
 }
 
-func eventExposureResponseBody(subscription smf_context.EventExposureSubscription) models.NsmfEventExposure {
-	eventSubscription := models.SmfEventExposureEventSubscription{
-		Event: models.SmfEvent_UPF_EVENT,
-		UpfEvents: []models.UpfEvent{
+func eventExposureResponseBody(subscription smf_context.EventExposureSubscription) nsmf.EventExposure {
+	eventSubscription := nsmf.EventSubscription{
+		Event: nsmf.EventUPFEvent,
+		UPFEvents: []nupf.Event{
 			{
-				Type:                     models.UpfEventType_USER_DATA_USAGE_MEASURES,
-				MeasurementTypes:         append([]models.UpfMeasurementType(nil), subscription.MeasurementTypes...),
-				GranularityOfMeasurement: models.UpfGranularityOfMeasurement_PER_SESSION,
+				Type:                     nupf.EventTypeUserDataUsageMeasures,
+				MeasurementTypes:         append([]nupf.MeasurementType(nil), subscription.MeasurementTypes...),
+				GranularityOfMeasurement: nupf.GranularityPerSession,
 			},
 		},
-		BundledEventNotifyUri: subscription.BundledEventNotifyURI,
 	}
-	return models.NsmfEventExposure{
-		Supi:        subscription.Supi,
-		SubId:       subscription.ID,
-		NotifId:     subscription.NotifID,
-		NotifUri:    subscription.NotifURI,
-		EventSubs:   []models.SmfEventExposureEventSubscription{eventSubscription},
+	return nsmf.EventExposure{
+		SUPI:        subscription.Supi,
+		NFID:        subscription.NFID,
+		SubID:       subscription.ID,
+		NotifID:     subscription.NotifID,
+		NotifURI:    subscription.NotifURI,
+		EventSubs:   []nsmf.EventSubscription{eventSubscription},
 		NotifMethod: models.SmfEventExposureNotificationMethod_PERIODIC,
 		RepPeriod:   subscription.ReportingPeriod,
 	}

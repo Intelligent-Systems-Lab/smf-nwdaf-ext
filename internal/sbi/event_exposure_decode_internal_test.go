@@ -7,6 +7,37 @@ import (
 	"github.com/gin-gonic/gin/binding"
 )
 
+func TestDecodeEventExposureCreateRequestAcceptsPyAnLFRelease18Shape(t *testing.T) {
+	body := `{
+		"supi":"imsi-001010000000001",
+		"anyUeInd":false,
+		"groupId":"",
+		"nfId":"4c69d9e0-1203-4a0d-ae37-fb0d18fe4381",
+		"subId":"",
+		"notifId":"correlation-1",
+		"notifUri":"http://127.0.0.1:9091/callbacks/upf-event-exposure",
+		"eventSubs":[{
+			"event":"UPF_EVENT",
+			"upfEvents":[{
+				"type":"USER_DATA_USAGE_MEASURES",
+				"measurementTypes":["VOLUME_MEASUREMENT","THROUGHPUT_MEASUREMENT"],
+				"granularityOfMeasurement":"PER_SESSION"
+			}]
+		}],
+		"notifMethod":"PERIODIC",
+		"repPeriod":10
+	}`
+	request, problem := decodeEventExposureCreateRequest(strings.NewReader(body))
+	if problem != nil {
+		t.Fatalf("unexpected ProblemDetails: %+v", problem)
+	}
+	if request.NFID != "4c69d9e0-1203-4a0d-ae37-fb0d18fe4381" ||
+		request.NotifURI != "http://127.0.0.1:9091/callbacks/upf-event-exposure" ||
+		len(request.MeasurementTypes) != 2 {
+		t.Fatalf("unexpected decoded request: %+v", request)
+	}
+}
+
 func TestDecodeEventExposureCreateRequestDnnPresence(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -50,6 +81,9 @@ func TestDecodeEventExposureCreateRequestDnnPresence(t *testing.T) {
 			}
 			if request.Selectors.Dnn != nil && *request.Selectors.Dnn != tt.wantDnn {
 				t.Fatalf("Dnn mismatch: got %q want %q", *request.Selectors.Dnn, tt.wantDnn)
+			}
+			if request.NFID != "nwdaf-instance" {
+				t.Fatalf("nfId mismatch: %q", request.NFID)
 			}
 		})
 	}
@@ -156,11 +190,9 @@ func TestDecodeEventExposureCreateRequestRejectsInvalidURIAndReportingFields(t *
 			wantParam: "/notifUri",
 		},
 		{
-			name: "fragment bundled uri",
-			body: validEventExposureJSONWithReplacement(
-				`"bundledEventNotifyUri":"https://nwdaf.example.com/upf"`,
-				`"bundledEventNotifyUri":"https://nwdaf.example.com/upf#x"`),
-			wantParam: "/eventSubs/0/bundledEventNotifyUri",
+			name:      "empty nfId",
+			body:      validEventExposureJSONWithReplacement(`"nfId":"nwdaf-instance"`, `"nfId":""`),
+			wantParam: "/nfId",
 		},
 		{
 			name:      "missing repPeriod",
@@ -321,13 +353,13 @@ func validEventExposureJSONWithPatches(extraTopLevel, extraEvent string) string 
 	return `{
 		` + extraTopLevel + `
 		"supi":"imsi-001010000000001",
+		"nfId":"nwdaf-instance",
 		"notifId":"correlation-1",
 		"notifUri":"https://nwdaf.example.com/nsmf",
 		"repPeriod":10,
 		"eventSubs":[{
 			` + extraEvent + `
 			"event":"UPF_EVENT",
-			"bundledEventNotifyUri":"https://nwdaf.example.com/upf",
 			"upfEvents":[{
 				"type":"USER_DATA_USAGE_MEASURES",
 				"measurementTypes":["VOLUME_MEASUREMENT"],

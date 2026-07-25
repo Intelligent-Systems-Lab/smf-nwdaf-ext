@@ -184,6 +184,76 @@ func TestEventExposureResolverCopiesSnapshotValues(t *testing.T) {
 	}
 }
 
+func TestStaticEventExposureResolverUsesConfiguredSession(t *testing.T) {
+	pduSessionID := int32(7)
+	sourceIP := net.ParseIP("192.0.2.7").To4()
+	resolver, err := NewStaticEventExposureTargetResolver([]StaticEventExposureSession{
+		{
+			SUPI:         "imsi-001010000000007",
+			UEIPAddress:  sourceIP,
+			NupfAPIRoot:  "http://127.0.0.8:8088",
+			UPFName:      "replay-upf",
+			Dnn:          "internet",
+			PDUSessionID: &pduSessionID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStaticEventExposureTargetResolver failed: %v", err)
+	}
+
+	sourceIP[0] = 203
+	pduSessionID = 9
+	target, err := resolver.ResolveEventExposureTarget(
+		stdctx.Background(),
+		"imsi-001010000000007",
+		EventExposureSelectors{
+			Dnn:          stringPtr("internet"),
+			PDUSessionID: int32Ptr(7),
+		},
+	)
+	if err != nil {
+		t.Fatalf("ResolveEventExposureTarget failed: %v", err)
+	}
+	if target.APIroot != "http://127.0.0.8:8088" ||
+		target.ServiceBaseURL != "http://127.0.0.8:8088/nupf-ee/v1" ||
+		target.UPFName != "replay-upf" ||
+		target.Dnn != "internet" ||
+		target.PDUSessionID != 7 ||
+		!target.UEIPAddress.Equal(net.ParseIP("192.0.2.7")) {
+		t.Fatalf("unexpected static target: %+v", target)
+	}
+}
+
+func TestStaticEventExposureResolverRejectsMissingDuplicateAndSelectorMismatch(t *testing.T) {
+	session := StaticEventExposureSession{
+		SUPI:        "imsi-001010000000001",
+		UEIPAddress: net.ParseIP("192.0.2.1").To4(),
+		NupfAPIRoot: "http://127.0.0.8:8088",
+		Dnn:         "internet",
+	}
+	if _, err := NewStaticEventExposureTargetResolver([]StaticEventExposureSession{session, session}); err == nil {
+		t.Fatal("expected duplicate SUPI error")
+	}
+	resolver, err := NewStaticEventExposureTargetResolver([]StaticEventExposureSession{session})
+	if err != nil {
+		t.Fatalf("NewStaticEventExposureTargetResolver failed: %v", err)
+	}
+	for _, test := range []struct {
+		supi      string
+		selectors EventExposureSelectors
+	}{
+		{supi: "imsi-001010000000999"},
+		{supi: session.SUPI, selectors: EventExposureSelectors{Dnn: stringPtr("ims")}},
+		{supi: session.SUPI, selectors: EventExposureSelectors{PDUSessionID: int32Ptr(1)}},
+		{supi: session.SUPI, selectors: EventExposureSelectors{Snssai: &models.Snssai{Sst: 1}}},
+	} {
+		if _, err = resolver.ResolveEventExposureTarget(
+			stdctx.Background(), test.supi, test.selectors); !errors.Is(err, ErrEventExposureNoMatchingSession) {
+			t.Fatalf("expected no matching session for %+v, got %v", test, err)
+		}
+	}
+}
+
 func resetEventExposureResolverState(t *testing.T) {
 	t.Helper()
 	oldUPI := smfContext.UserPlaneInformation

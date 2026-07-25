@@ -7,13 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/free5gc/openapi"
 	"github.com/free5gc/openapi/models"
-	NupfEventExposure "github.com/free5gc/openapi/upf/EventExposure"
+	"github.com/free5gc/smf/internal/compat/nupf"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/pkg/factory"
 )
@@ -86,12 +84,12 @@ func TestValidateNupfCreateSuccessLocationInvariants(t *testing.T) {
 			case "subscription id with encoded slash rejected":
 				subscriptionID = "a%2Fb"
 			}
-			_, err := validateNupfCreateSuccess(target, requestURI, &NupfEventExposure.CreateSubscriptionResponse{
-				Location: tt.location,
-				UpfCreatedEventSubscription: models.UpfCreatedEventSubscription{
-					SubscriptionId: subscriptionID,
-				},
-			})
+			_, err := validateNupfCreateSuccess(
+				target,
+				requestURI,
+				tt.location,
+				nupf.CreatedEventSubscription{SubscriptionID: subscriptionID},
+			)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("error mismatch: got %v wantErr %v", err, tt.wantErr)
 			}
@@ -263,7 +261,7 @@ func TestNupfEventExposureOAuthTokenFailureSendsNoNupfRequest(t *testing.T) {
 func TestNupfEventExposureDefaultClientSetupUsesBasePathMetricsAndNoFollow(t *testing.T) {
 	var requestCount int
 	var capturedPath string
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
 		capturedPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
@@ -273,8 +271,6 @@ func TestNupfEventExposureDefaultClientSetupUsesBasePathMetricsAndNoFollow(t *te
 			t.Fatalf("Write failed: %v", writeErr)
 		}
 	}))
-	server.EnableHTTP2 = true
-	server.StartTLS()
 	defer server.Close()
 
 	service := newTestNupfEventExposureService(false, "")
@@ -294,9 +290,14 @@ func TestNupfEventExposureDefaultClientSetupUsesBasePathMetricsAndNoFollow(t *te
 
 	client := service.EventExposureClients[server.URL]
 	if client == nil {
-		t.Fatal("default setup did not cache generated client")
+		t.Fatal("default setup did not cache HTTP client")
 	}
-	assertDefaultClientConfiguration(t, client)
+	if client.Timeout != nupfEventExposureTimeout {
+		t.Fatalf("timeout mismatch: got %s want %s", client.Timeout, nupfEventExposureTimeout)
+	}
+	if client.CheckRedirect == nil {
+		t.Fatal("default setup did not configure redirect rejection")
+	}
 }
 
 func newTestNupfEventExposureService(oauth bool, nrfURI string) *nupfEventExposureService {
@@ -309,7 +310,7 @@ func newTestNupfEventExposureService(oauth bool, nrfURI string) *nupfEventExposu
 	}}
 	return &nupfEventExposureService{
 		consumer:                    consumer,
-		EventExposureClients:        make(map[string]*NupfEventExposure.APIClient),
+		EventExposureClients:        make(map[string]*http.Client),
 		EventExposureCreateRequests: make(map[string]string),
 	}
 }
@@ -319,27 +320,12 @@ func installTestEventExposureClient(
 	apiRoot string,
 	httpClient *http.Client,
 ) {
-	configuration := NupfEventExposure.NewConfiguration()
-	configuration.SetBasePath(apiRoot)
-	configuration.SetRedirectPolicy(openapi.RejectRedirects)
-	configuration.SetHTTPClient(httpClient)
-	service.EventExposureClients[apiRoot] = NupfEventExposure.NewAPIClient(configuration)
-	service.EventExposureCreateRequests[apiRoot] = strings.TrimRight(
-		configuration.BasePath(), "/") + "/ee-subscriptions"
-}
-
-func assertDefaultClientConfiguration(t *testing.T, client *NupfEventExposure.APIClient) {
-	t.Helper()
-	cfg := reflect.ValueOf(client).Elem().FieldByName("cfg").Elem()
-	if cfg.FieldByName("MetricsHook").IsNil() {
-		t.Fatal("default setup did not configure metrics hook")
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
 	}
-	if cfg.FieldByName("redirectPolicy").IsNil() {
-		t.Fatal("default setup did not configure redirect policy")
-	}
-	if !cfg.FieldByName("httpClient").IsNil() {
-		t.Fatal("default setup unexpectedly configured an explicit HTTP client")
-	}
+	service.EventExposureClients[apiRoot] = httpClient
+	service.EventExposureCreateRequests[apiRoot] =
+		strings.TrimRight(apiRoot, "/") + "/nupf-ee/v1/ee-subscriptions"
 }
 
 func testEventExposureTarget(apiRoot string) smf_context.EventExposureTarget {
@@ -349,22 +335,22 @@ func testEventExposureTarget(apiRoot string) smf_context.EventExposureTarget {
 	}
 }
 
-func testNupfCreateRequest() models.UpfCreateEventSubscription {
-	return models.UpfCreateEventSubscription{
-		Subscription: models.UpfEventSubscription{
-			EventNotifyUri:      "https://nwdaf.example.com/upf",
-			NotifyCorrelationId: "correlation-1",
-			NfId:                "smf-instance",
-			UeIpAddress:         &models.IpAddr{Ipv4Addr: "192.0.2.1"},
-			EventList: []models.UpfEvent{
+func testNupfCreateRequest() nupf.CreateEventSubscription {
+	return nupf.CreateEventSubscription{
+		Subscription: nupf.EventSubscription{
+			EventNotifyURI:      "https://nwdaf.example.com/upf",
+			NotifyCorrelationID: "correlation-1",
+			NFID:                "smf-instance",
+			UEIPAddress:         &models.IpAddr{Ipv4Addr: "192.0.2.1"},
+			EventList: []nupf.Event{
 				{
-					Type:                     models.UpfEventType_USER_DATA_USAGE_MEASURES,
-					MeasurementTypes:         []models.UpfMeasurementType{models.UpfMeasurementType_VOLUME_MEASUREMENT},
-					GranularityOfMeasurement: models.UpfGranularityOfMeasurement_PER_SESSION,
+					Type:                     nupf.EventTypeUserDataUsageMeasures,
+					MeasurementTypes:         []nupf.MeasurementType{nupf.MeasurementTypeVolume},
+					GranularityOfMeasurement: nupf.GranularityPerSession,
 				},
 			},
-			EventReportingMode: models.UpfEventMode{
-				Trigger:   models.UpfEventTrigger_PERIODIC,
+			EventReportingMode: nupf.EventMode{
+				Trigger:   nupf.EventTriggerPeriodic,
 				RepPeriod: 10,
 			},
 		},

@@ -7,7 +7,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/free5gc/openapi/models"
+	nupfcompat "github.com/free5gc/smf/internal/compat/nupf"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/internal/logger"
 	"github.com/free5gc/smf/internal/sbi/consumer"
@@ -45,20 +45,62 @@ func TestEventExposureCreateSuccessStoresStateAndMapsNupfRequest(t *testing.T) {
 		t.Fatalf("expected one Nupf Create, got %d", nupf.createCalls)
 	}
 	subscription := nupf.lastCreateRequest.Subscription
-	if subscription.EventNotifyUri != "https://nwdaf.example.com/upf" ||
-		subscription.NotifyCorrelationId != "correlation-1" ||
-		subscription.NfId != "smf-instance" ||
-		subscription.EventReportingMode.Trigger != models.UpfEventTrigger_PERIODIC ||
+	if subscription.EventNotifyURI != "https://nwdaf.example.com/nsmf" ||
+		subscription.NotifyCorrelationID != "correlation-1" ||
+		subscription.NFID != "smf-instance" ||
+		subscription.EventReportingMode.Trigger != nupfcompat.EventTriggerPeriodic ||
 		subscription.EventReportingMode.RepPeriod != 10 ||
-		subscription.UeIpAddress == nil ||
-		subscription.UeIpAddress.Ipv4Addr != "192.0.2.1" {
+		subscription.UEIPAddress == nil ||
+		subscription.UEIPAddress.Ipv4Addr != "192.0.2.1" {
 		t.Fatalf("unexpected Nupf mapping: %+v", subscription)
 	}
 	if len(subscription.EventList) != 1 ||
-		subscription.EventList[0].Type != models.UpfEventType_USER_DATA_USAGE_MEASURES ||
-		subscription.EventList[0].GranularityOfMeasurement != models.UpfGranularityOfMeasurement_PER_SESSION ||
-		subscription.EventList[0].MeasurementTypes[0] != models.UpfMeasurementType_VOLUME_MEASUREMENT {
+		subscription.EventList[0].Type != nupfcompat.EventTypeUserDataUsageMeasures ||
+		subscription.EventList[0].GranularityOfMeasurement != nupfcompat.GranularityPerSession ||
+		subscription.EventList[0].MeasurementTypes[0] != nupfcompat.MeasurementTypeVolume {
 		t.Fatalf("unexpected Nupf event list: %+v", subscription.EventList)
+	}
+}
+
+func TestConfiguredEventExposureResolverSelectsStaticModeOnlyWhenEnabled(t *testing.T) {
+	disabled, err := configuredEventExposureResolver(&factory.Config{
+		Configuration: &factory.Configuration{
+			EventExposure: &factory.EventExposureConfig{
+				StaticSessionResolution: &factory.StaticSessionResolutionConfig{
+					Sessions: []factory.StaticSessionMapping{{
+						Supi: "imsi-1", UEIPv4: "192.0.2.1", NupfEeApiRoot: "http://upf.example",
+					}},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("disabled resolver failed: %v", err)
+	}
+	if _, ok := disabled.(*smf_context.EventExposureTargetResolver); !ok {
+		t.Fatalf("disabled mode returned %T", disabled)
+	}
+
+	enabled, err := configuredEventExposureResolver(&factory.Config{
+		Configuration: &factory.Configuration{
+			EventExposure: &factory.EventExposureConfig{
+				StaticSessionResolution: &factory.StaticSessionResolutionConfig{
+					Enabled: true,
+					Sessions: []factory.StaticSessionMapping{{
+						Supi: "imsi-1", UEIPv4: "192.0.2.1", NupfEeApiRoot: "http://upf.example",
+					}},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("enabled resolver failed: %v", err)
+	}
+	target, err := enabled.ResolveEventExposureTarget(
+		context.Background(), "imsi-1", smf_context.EventExposureSelectors{})
+	if err != nil || target.APIroot != "http://upf.example" ||
+		!target.UEIPAddress.Equal(net.ParseIP("192.0.2.1")) {
+		t.Fatalf("unexpected static resolution: target=%+v err=%v", target, err)
 	}
 }
 
@@ -310,14 +352,12 @@ func TestEventExposureWarningsDoNotLogSensitiveValues(t *testing.T) {
 	request.Supi = "imsi-001010999999999"
 	request.NotifID = "notif-sensitive"
 	request.NotifURI = "https://nwdaf.example.com/nsmf-sensitive"
-	request.BundledEventNotifyURI = "https://nwdaf.example.com/upf-sensitive"
 
 	_, _ = processor.CreateEventExposureSubscription(context.Background(), request)
 	for _, sentinel := range []string{
 		request.Supi,
 		request.NotifID,
 		request.NotifURI,
-		request.BundledEventNotifyURI,
 		"192.0.2.55",
 		"apiroot-sensitive",
 		"upf-sub-sensitive",
@@ -341,12 +381,12 @@ func newTestEventExposureProcessor(t *testing.T, deps EventExposureDependencies)
 
 func validEventExposureCreateRequest() EventExposureCreateRequest {
 	return EventExposureCreateRequest{
-		Supi:                  "imsi-001010000000001",
-		NotifID:               "correlation-1",
-		NotifURI:              "https://nwdaf.example.com/nsmf",
-		BundledEventNotifyURI: "https://nwdaf.example.com/upf",
-		MeasurementTypes:      []models.UpfMeasurementType{models.UpfMeasurementType_VOLUME_MEASUREMENT},
-		ReportingPeriod:       10,
+		Supi:             "imsi-001010000000001",
+		NFID:             "nwdaf-instance",
+		NotifID:          "correlation-1",
+		NotifURI:         "https://nwdaf.example.com/nsmf",
+		MeasurementTypes: []nupfcompat.MeasurementType{nupfcompat.MeasurementTypeVolume},
+		ReportingPeriod:  10,
 	}
 }
 
@@ -407,7 +447,7 @@ type fakeEventExposureConsumer struct {
 	createResult             smf_context.NupfCreateResult
 	createErr                error
 	deleteErr                error
-	lastCreateRequest        models.UpfCreateEventSubscription
+	lastCreateRequest        nupfcompat.CreateEventSubscription
 	lastCreateTarget         smf_context.EventExposureTarget
 	lastDeleteTarget         smf_context.EventExposureTarget
 	lastDeleteSubscriptionID string
@@ -416,7 +456,7 @@ type fakeEventExposureConsumer struct {
 func (f *fakeEventExposureConsumer) CreateSubscription(
 	_ context.Context,
 	target smf_context.EventExposureTarget,
-	request models.UpfCreateEventSubscription,
+	request nupfcompat.CreateEventSubscription,
 ) (smf_context.NupfCreateResult, error) {
 	f.createCalls++
 	f.lastCreateTarget = target

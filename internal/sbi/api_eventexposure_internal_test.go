@@ -11,7 +11,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/free5gc/openapi/models"
+	"github.com/free5gc/smf/internal/compat/nsmf"
+	"github.com/free5gc/smf/internal/compat/nupf"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/internal/sbi/consumer"
 	"github.com/free5gc/smf/internal/sbi/processor"
@@ -64,18 +65,18 @@ func TestHTTPCreateIndividualSubcriptionReturnsLocationAndBody(t *testing.T) {
 		t.Fatalf("Location mismatch: %q", recorder.Header().Get("Location"))
 	}
 
-	var response models.NsmfEventExposure
+	var response nsmf.EventExposure
 	if unmarshalErr := json.Unmarshal(recorder.Body.Bytes(), &response); unmarshalErr != nil {
 		t.Fatalf("Unmarshal response failed: %v", unmarshalErr)
 	}
-	if response.SubId != "sub-1" ||
-		response.Supi != "imsi-001010000000001" ||
-		response.NotifId != "correlation-1" ||
-		response.NotifUri != "https://nwdaf.example.com/nsmf" ||
+	if response.SubID != "sub-1" ||
+		response.SUPI != "imsi-001010000000001" ||
+		response.NFID != "nwdaf-instance" ||
+		response.NotifID != "correlation-1" ||
+		response.NotifURI != "https://nwdaf.example.com/nsmf" ||
 		response.RepPeriod != 10 ||
-		response.NotifMethod != models.SmfEventExposureNotificationMethod_PERIODIC ||
 		len(response.EventSubs) != 1 ||
-		response.EventSubs[0].BundledEventNotifyUri != "https://nwdaf.example.com/upf" {
+		len(response.EventSubs[0].UPFEvents) != 1 {
 		t.Fatalf("unexpected response body: %+v", response)
 	}
 }
@@ -127,7 +128,7 @@ type fakeSBIEventExposureConsumer struct {
 func (f fakeSBIEventExposureConsumer) CreateSubscription(
 	context.Context,
 	smf_context.EventExposureTarget,
-	models.UpfCreateEventSubscription,
+	nupf.CreateEventSubscription,
 ) (smf_context.NupfCreateResult, error) {
 	return f.result, nil
 }

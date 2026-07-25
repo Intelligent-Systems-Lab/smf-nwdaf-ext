@@ -2,13 +2,15 @@ package processor
 
 import (
 	"context"
+	"net"
 
 	"github.com/google/uuid"
 
-	"github.com/free5gc/openapi/models"
+	"github.com/free5gc/smf/internal/compat/nupf"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/internal/sbi/consumer"
 	"github.com/free5gc/smf/pkg/app"
+	"github.com/free5gc/smf/pkg/factory"
 )
 
 const (
@@ -39,7 +41,11 @@ func NewProcessorWithEventExposureDependencies(
 		deps.Repository = smf_context.NewEventExposureRepository()
 	}
 	if deps.Resolver == nil {
-		deps.Resolver = smf_context.NewEventExposureTargetResolver()
+		var err error
+		deps.Resolver, err = configuredEventExposureResolver(factory.SmfConfig)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if deps.UUIDGenerator == nil {
 		deps.UUIDGenerator = uuidGenerator{}
@@ -49,6 +55,28 @@ func NewProcessorWithEventExposureDependencies(
 		ProcessorSmf:  smf,
 		eventExposure: deps,
 	}, nil
+}
+
+func configuredEventExposureResolver(config *factory.Config) (EventExposureResolver, error) {
+	if config == nil || config.Configuration == nil || config.Configuration.EventExposure == nil ||
+		config.Configuration.EventExposure.StaticSessionResolution == nil ||
+		!config.Configuration.EventExposure.StaticSessionResolution.Enabled {
+		return smf_context.NewEventExposureTargetResolver(), nil
+	}
+
+	configured := config.Configuration.EventExposure.StaticSessionResolution.Sessions
+	sessions := make([]smf_context.StaticEventExposureSession, 0, len(configured))
+	for _, mapping := range configured {
+		sessions = append(sessions, smf_context.StaticEventExposureSession{
+			SUPI:         mapping.Supi,
+			UEIPAddress:  net.ParseIP(mapping.UEIPv4).To4(),
+			NupfAPIRoot:  mapping.NupfEeApiRoot,
+			UPFName:      mapping.UPFName,
+			Dnn:          mapping.Dnn,
+			PDUSessionID: mapping.PDUSessionID,
+		})
+	}
+	return smf_context.NewStaticEventExposureTargetResolver(sessions)
 }
 
 type EventExposureRepository interface {
@@ -69,7 +97,7 @@ type NupfEventExposureConsumer interface {
 	CreateSubscription(
 		ctx context.Context,
 		target smf_context.EventExposureTarget,
-		request models.UpfCreateEventSubscription,
+		request nupf.CreateEventSubscription,
 	) (smf_context.NupfCreateResult, error)
 	DeleteSubscription(
 		ctx context.Context,

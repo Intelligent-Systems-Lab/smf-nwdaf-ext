@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/free5gc/openapi/models"
+	"github.com/free5gc/smf/internal/compat/nupf"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/internal/logger"
 )
@@ -18,13 +19,13 @@ const (
 )
 
 type EventExposureCreateRequest struct {
-	Supi                  string
-	Selectors             smf_context.EventExposureSelectors
-	NotifID               string
-	NotifURI              string
-	BundledEventNotifyURI string
-	MeasurementTypes      []models.UpfMeasurementType
-	ReportingPeriod       int32
+	Supi             string
+	Selectors        smf_context.EventExposureSelectors
+	NFID             string
+	NotifID          string
+	NotifURI         string
+	MeasurementTypes []nupf.MeasurementType
+	ReportingPeriod  int32
 }
 
 type EventExposureCreateResult struct {
@@ -56,18 +57,18 @@ func (p *Processor) CreateEventExposureSubscription(
 	}
 
 	subscription := smf_context.EventExposureSubscription{
-		Supi:                  request.Supi,
-		Selectors:             request.Selectors,
-		NotifID:               request.NotifID,
-		NotifURI:              request.NotifURI,
-		BundledEventNotifyURI: request.BundledEventNotifyURI,
-		MeasurementTypes:      append([]models.UpfMeasurementType(nil), request.MeasurementTypes...),
-		ReportingPeriod:       request.ReportingPeriod,
-		Granularity:           models.UpfGranularityOfMeasurement_PER_SESSION,
-		CreatedAt:             time.Now(),
-		Target:                target,
-		NupfSubscriptionID:    nupfResult.SubscriptionID,
-		NupfLocation:          nupfResult.ValidatedLocation,
+		Supi:               request.Supi,
+		Selectors:          request.Selectors,
+		NFID:               request.NFID,
+		NotifID:            request.NotifID,
+		NotifURI:           request.NotifURI,
+		MeasurementTypes:   append([]nupf.MeasurementType(nil), request.MeasurementTypes...),
+		ReportingPeriod:    request.ReportingPeriod,
+		Granularity:        nupf.GranularityPerSession,
+		CreatedAt:          time.Now(),
+		Target:             target,
+		NupfSubscriptionID: nupfResult.SubscriptionID,
+		NupfLocation:       nupfResult.ValidatedLocation,
 	}
 
 	for attempt := 0; attempt < maxEventExposureIDAttempts; attempt++ {
@@ -115,24 +116,24 @@ func buildNupfCreateEventSubscriptionRequest(
 	nfID string,
 	target smf_context.EventExposureTarget,
 	request EventExposureCreateRequest,
-) models.UpfCreateEventSubscription {
-	return models.UpfCreateEventSubscription{
-		Subscription: models.UpfEventSubscription{
-			EventList: []models.UpfEvent{
+) nupf.CreateEventSubscription {
+	return nupf.CreateEventSubscription{
+		Subscription: nupf.EventSubscription{
+			EventList: []nupf.Event{
 				{
-					Type:                     models.UpfEventType_USER_DATA_USAGE_MEASURES,
-					MeasurementTypes:         append([]models.UpfMeasurementType(nil), request.MeasurementTypes...),
-					GranularityOfMeasurement: models.UpfGranularityOfMeasurement_PER_SESSION,
+					Type:                     nupf.EventTypeUserDataUsageMeasures,
+					MeasurementTypes:         append([]nupf.MeasurementType(nil), request.MeasurementTypes...),
+					GranularityOfMeasurement: nupf.GranularityPerSession,
 				},
 			},
-			EventNotifyUri:      request.BundledEventNotifyURI,
-			NotifyCorrelationId: request.NotifID,
-			EventReportingMode: models.UpfEventMode{
-				Trigger:   models.UpfEventTrigger_PERIODIC,
+			EventNotifyURI:      request.NotifURI,
+			NotifyCorrelationID: request.NotifID,
+			EventReportingMode: nupf.EventMode{
+				Trigger:   nupf.EventTriggerPeriodic,
 				RepPeriod: request.ReportingPeriod,
 			},
-			NfId:        nfID,
-			UeIpAddress: ipAddrFromNetIP(target.UEIPAddress),
+			NFID:        nfID,
+			UEIPAddress: ipAddrFromNetIP(target.UEIPAddress),
 		},
 	}
 }

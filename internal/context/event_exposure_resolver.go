@@ -23,6 +23,74 @@ func NewEventExposureTargetResolver() *EventExposureTargetResolver {
 	return &EventExposureTargetResolver{}
 }
 
+type StaticEventExposureSession struct {
+	SUPI         string
+	UEIPAddress  net.IP
+	NupfAPIRoot  string
+	UPFName      string
+	Dnn          string
+	PDUSessionID *int32
+}
+
+type StaticEventExposureTargetResolver struct {
+	sessions map[string]StaticEventExposureSession
+}
+
+func NewStaticEventExposureTargetResolver(
+	sessions []StaticEventExposureSession,
+) (*StaticEventExposureTargetResolver, error) {
+	bySUPI := make(map[string]StaticEventExposureSession, len(sessions))
+	for _, session := range sessions {
+		if session.SUPI == "" || session.UEIPAddress == nil || session.NupfAPIRoot == "" {
+			return nil, errors.New("invalid static event exposure session")
+		}
+		if _, exists := bySUPI[session.SUPI]; exists {
+			return nil, errors.New("duplicate static event exposure session")
+		}
+		session.UEIPAddress = append(net.IP(nil), session.UEIPAddress...)
+		if session.PDUSessionID != nil {
+			id := *session.PDUSessionID
+			session.PDUSessionID = &id
+		}
+		bySUPI[session.SUPI] = session
+	}
+	return &StaticEventExposureTargetResolver{sessions: bySUPI}, nil
+}
+
+func (r *StaticEventExposureTargetResolver) ResolveEventExposureTarget(
+	_ context.Context,
+	supi string,
+	selectors EventExposureSelectors,
+) (EventExposureTarget, error) {
+	session, ok := r.sessions[supi]
+	if !ok {
+		return EventExposureTarget{}, ErrEventExposureNoMatchingSession
+	}
+	if selectors.Dnn != nil && (*selectors.Dnn != session.Dnn || session.Dnn == "") {
+		return EventExposureTarget{}, ErrEventExposureNoMatchingSession
+	}
+	if selectors.PDUSessionID != nil &&
+		(session.PDUSessionID == nil || *selectors.PDUSessionID != *session.PDUSessionID) {
+		return EventExposureTarget{}, ErrEventExposureNoMatchingSession
+	}
+	if selectors.Snssai != nil {
+		return EventExposureTarget{}, ErrEventExposureNoMatchingSession
+	}
+
+	pduSessionID := int32(0)
+	if session.PDUSessionID != nil {
+		pduSessionID = *session.PDUSessionID
+	}
+	return EventExposureTarget{
+		UPFName:        session.UPFName,
+		APIroot:        session.NupfAPIRoot,
+		ServiceBaseURL: strings.TrimRight(session.NupfAPIRoot, "/") + "/nupf-ee/v1",
+		UEIPAddress:    append(net.IP(nil), session.UEIPAddress...),
+		Dnn:            session.Dnn,
+		PDUSessionID:   pduSessionID,
+	}, nil
+}
+
 func (r *EventExposureTargetResolver) ResolveEventExposureTarget(
 	_ context.Context,
 	supi string,

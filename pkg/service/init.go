@@ -235,23 +235,25 @@ func (a *SmfApp) Terminate() {
 func (a *SmfApp) terminateProcedure() {
 	logger.MainLog.Infof("Terminating SMF...")
 	a.pfcpTerminate()
-	// deregister with NRF
-	err := a.Consumer().SendDeregisterNFInstance()
-	if err != nil {
-		switch apiErr := err.(type) {
-		case openapi.GenericOpenAPIError:
-			switch errModel := apiErr.Model().(type) {
-			case NFManagement.DeregisterNFInstanceError:
-				pd := &errModel.ProblemDetails
-				logger.MainLog.Errorf("Deregister NF instance Failed Problem[%+v]", pd)
+	if a.cfg.Configuration.NrfRegistrationEnabledOrDefault() {
+		// deregister with NRF
+		err := a.Consumer().SendDeregisterNFInstance()
+		if err != nil {
+			switch apiErr := err.(type) {
+			case openapi.GenericOpenAPIError:
+				switch errModel := apiErr.Model().(type) {
+				case NFManagement.DeregisterNFInstanceError:
+					pd := &errModel.ProblemDetails
+					logger.MainLog.Errorf("Deregister NF instance Failed Problem[%+v]", pd)
+				case error:
+					logger.MainLog.Errorf("Deregister NF instance Error[%+v]", err)
+				}
 			case error:
 				logger.MainLog.Errorf("Deregister NF instance Error[%+v]", err)
 			}
-		case error:
-			logger.MainLog.Errorf("Deregister NF instance Error[%+v]", err)
+		} else {
+			logger.MainLog.Infof("Deregister from NRF successfully")
 		}
-	} else {
-		logger.MainLog.Infof("Deregister from NRF successfully")
 	}
 
 	a.sbiServer.Stop()

@@ -1,19 +1,30 @@
 package consumer
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/free5gc/openapi"
 	"github.com/free5gc/openapi/models"
-	NupfEventExposure "github.com/free5gc/openapi/upf/EventExposure"
+	"github.com/free5gc/smf/internal/compat/nupf"
 	smf_context "github.com/free5gc/smf/internal/context"
 	sbi_metrics "github.com/free5gc/util/metrics/sbi"
+	"golang.org/x/oauth2"
+)
+
+const (
+	nupfEventExposureTimeout   = 30 * time.Second
+	nupfEventExposureBodyLimit = 1 << 20
+	nupfServiceName            = models.ServiceName("nupf-ee")
 )
 
 type NupfEventExposureErrorKind string
@@ -41,30 +52,28 @@ type nupfEventExposureService struct {
 	consumer *Consumer
 
 	EventExposureMu             sync.RWMutex
-	EventExposureClients        map[string]*NupfEventExposure.APIClient
+	EventExposureClients        map[string]*http.Client
 	EventExposureCreateRequests map[string]string
 }
 
-func (s *nupfEventExposureService) getEventExposureClient(apiRoot string) *NupfEventExposure.APIClient {
+func (s *nupfEventExposureService) getEventExposureClient(apiRoot string) *http.Client {
 	if apiRoot == "" {
 		return nil
 	}
 
 	s.EventExposureMu.RLock()
 	client, ok := s.EventExposureClients[apiRoot]
+	s.EventExposureMu.RUnlock()
 	if ok {
-		s.EventExposureMu.RUnlock()
 		return client
 	}
 
-	configuration := NupfEventExposure.NewConfiguration()
-	configuration.SetBasePath(apiRoot)
-	configuration.SetMetrics(sbi_metrics.SbiMetricHook)
-	configuration.SetRedirectPolicy(openapi.RejectRedirects)
-	client = NupfEventExposure.NewAPIClient(configuration)
-	requestURI := strings.TrimRight(configuration.BasePath(), "/") + "/ee-subscriptions"
+	client = &http.Client{
+		Timeout:       nupfEventExposureTimeout,
+		CheckRedirect: rejectNupfRedirects,
+	}
+	requestURI := strings.TrimRight(apiRoot, "/") + "/nupf-ee/v1/ee-subscriptions"
 
-	s.EventExposureMu.RUnlock()
 	s.EventExposureMu.Lock()
 	defer s.EventExposureMu.Unlock()
 	if existing, exists := s.EventExposureClients[apiRoot]; exists {
@@ -78,14 +87,11 @@ func (s *nupfEventExposureService) getEventExposureClient(apiRoot string) *NupfE
 func (s *nupfEventExposureService) CreateSubscription(
 	ctx context.Context,
 	target smf_context.EventExposureTarget,
-	request models.UpfCreateEventSubscription,
+	request nupf.CreateEventSubscription,
 ) (smf_context.NupfCreateResult, error) {
 	client := s.getEventExposureClient(target.APIroot)
 	if client == nil {
-		return smf_context.NupfCreateResult{}, &NupfEventExposureError{
-			Kind:      NupfEventExposureErrorTransport,
-			Operation: "create",
-		}
+		return smf_context.NupfCreateResult{}, nupfTransportError("create")
 	}
 
 	callCtx, err := s.tokenContext(ctx)
@@ -96,18 +102,40 @@ func (s *nupfEventExposureService) CreateSubscription(
 		}
 	}
 
-	createRequest := &NupfEventExposure.CreateSubscriptionRequest{}
-	createRequest.SetUpfCreateEventSubscription(request)
-	response, err := client.SubscriptionsCollectionApi.CreateSubscription(callCtx, createRequest)
+	payload, err := json.Marshal(request)
 	if err != nil {
-		return smf_context.NupfCreateResult{}, classifyNupfCreateError(err)
+		return smf_context.NupfCreateResult{}, nupfTransportError("create")
 	}
-	result, err := validateNupfCreateSuccess(target, s.createRequestURI(target.APIroot), response)
+	requestURI := s.createRequestURI(target.APIroot)
+	httpRequest, err := http.NewRequestWithContext(
+		callCtx, http.MethodPost, requestURI, bytes.NewReader(payload))
 	if err != nil {
+		return smf_context.NupfCreateResult{}, nupfTransportError("create")
+	}
+	httpRequest.Header.Set("Accept", "application/json")
+	httpRequest.Header.Set("Content-Type", "application/json")
+	if err = authorizeNupfRequest(callCtx, httpRequest); err != nil {
 		return smf_context.NupfCreateResult{}, &NupfEventExposureError{
-			Kind:      NupfEventExposureErrorMalformedSuccess,
+			Kind:      NupfEventExposureErrorToken,
 			Operation: "create",
 		}
+	}
+
+	response, body, err := doNupfRequest(client, httpRequest)
+	if err != nil {
+		return smf_context.NupfCreateResult{}, classifyNupfHTTPError("create", response, body, err)
+	}
+	if response.StatusCode != http.StatusCreated {
+		return smf_context.NupfCreateResult{}, classifyNupfHTTPStatus("create", response.StatusCode, body)
+	}
+
+	var created nupf.CreatedEventSubscription
+	if err = json.Unmarshal(body, &created); err != nil {
+		return smf_context.NupfCreateResult{}, malformedNupfSuccess("create", response.StatusCode)
+	}
+	result, err := validateNupfCreateSuccess(target, requestURI, response.Header.Get("Location"), created)
+	if err != nil {
+		return smf_context.NupfCreateResult{}, malformedNupfSuccess("create", response.StatusCode)
 	}
 	return result, nil
 }
@@ -119,19 +147,30 @@ func (s *nupfEventExposureService) DeleteSubscription(
 ) error {
 	client := s.getEventExposureClient(target.APIroot)
 	if client == nil {
-		return &NupfEventExposureError{Kind: NupfEventExposureErrorTransport, Operation: "delete"}
+		return nupfTransportError("delete")
 	}
 
 	callCtx, err := s.tokenContext(ctx)
 	if err != nil {
 		return &NupfEventExposureError{Kind: NupfEventExposureErrorToken, Operation: "delete"}
 	}
-
-	deleteRequest := &NupfEventExposure.DeleteSubscriptionRequest{}
-	deleteRequest.SetSubscriptionId(subscriptionID)
-	_, err = client.IndividualSubscriptionDocumentApi.DeleteSubscription(callCtx, deleteRequest)
+	requestURI := strings.TrimRight(target.ServiceBaseURL, "/") +
+		"/ee-subscriptions/" + url.PathEscape(subscriptionID)
+	httpRequest, err := http.NewRequestWithContext(callCtx, http.MethodDelete, requestURI, nil)
 	if err != nil {
-		return classifyNupfDeleteError(err)
+		return nupfTransportError("delete")
+	}
+	httpRequest.Header.Set("Accept", "application/json")
+	if err = authorizeNupfRequest(callCtx, httpRequest); err != nil {
+		return &NupfEventExposureError{Kind: NupfEventExposureErrorToken, Operation: "delete"}
+	}
+
+	response, body, err := doNupfRequest(client, httpRequest)
+	if err != nil {
+		return classifyNupfHTTPError("delete", response, body, err)
+	}
+	if response.StatusCode != http.StatusNoContent {
+		return classifyNupfHTTPStatus("delete", response.StatusCode, body)
 	}
 	return nil
 }
@@ -142,11 +181,17 @@ func (s *nupfEventExposureService) tokenContext(ctx context.Context) (context.Co
 	}
 
 	tokenCtx, _, err := s.consumer.Context().GetTokenCtx(
-		models.ServiceName_NUPF_EE, models.NrfNfManagementNfType_UPF)
+		nupfServiceName, models.NrfNfManagementNfType_UPF)
 	if err != nil {
 		return nil, err
 	}
-	return tokenCtx, nil
+	if source, ok := tokenCtx.Value(openapi.ContextOAuth2).(oauth2.TokenSource); ok {
+		return context.WithValue(ctx, openapi.ContextOAuth2, source), nil
+	}
+	if token, ok := tokenCtx.Value(openapi.ContextAccessToken).(string); ok {
+		return context.WithValue(ctx, openapi.ContextAccessToken, token), nil
+	}
+	return nil, errors.New("token context did not contain an access token")
 }
 
 func (s *nupfEventExposureService) createRequestURI(apiRoot string) string {
@@ -155,80 +200,125 @@ func (s *nupfEventExposureService) createRequestURI(apiRoot string) string {
 	return s.EventExposureCreateRequests[apiRoot]
 }
 
-func classifyNupfCreateError(err error) error {
-	return classifyNupfError("create", err)
-}
-
-func classifyNupfDeleteError(err error) error {
-	return classifyNupfError("delete", err)
-}
-
-func classifyNupfError(operation string, err error) error {
-	var apiError openapi.GenericOpenAPIError
-	if errors.As(err, &apiError) {
-		classified := &NupfEventExposureError{
-			StatusCode: apiError.ErrorStatus,
-			Operation:  operation,
+func authorizeNupfRequest(ctx context.Context, request *http.Request) error {
+	if source, ok := ctx.Value(openapi.ContextOAuth2).(oauth2.TokenSource); ok {
+		token, err := source.Token()
+		if err != nil {
+			return err
 		}
-		switch model := apiError.Model().(type) {
-		case NupfEventExposure.CreateSubscriptionError:
-			classified.Kind = nupfErrorKindFromCreateStatus(apiError.ErrorStatus)
-			if model.ProblemDetails.Status != 0 {
-				classified.ProblemDetails = &model.ProblemDetails
+		token.SetAuthHeader(request)
+		return nil
+	}
+	if token, ok := ctx.Value(openapi.ContextAccessToken).(string); ok && token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	return nil
+}
+
+func doNupfRequest(client *http.Client, request *http.Request) (*http.Response, []byte, error) {
+	start := time.Now()
+	response, err := client.Do(request)
+	status := 0
+	if response != nil {
+		status = response.StatusCode
+	}
+	sbi_metrics.SbiMetricHook(
+		request.Method, string(nupfServiceName), status, time.Since(start).Seconds())
+	if response == nil {
+		return nil, nil, err
+	}
+	defer response.Body.Close()
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, nupfEventExposureBodyLimit+1))
+	if readErr != nil {
+		return response, nil, readErr
+	}
+	if len(body) > nupfEventExposureBodyLimit {
+		return response, nil, errors.New("nupf response body exceeded limit")
+	}
+	return response, body, err
+}
+
+func rejectNupfRedirects(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
+func classifyNupfHTTPError(
+	operation string,
+	response *http.Response,
+	body []byte,
+	err error,
+) error {
+	if response != nil {
+		if response.StatusCode == http.StatusTemporaryRedirect ||
+			response.StatusCode == http.StatusPermanentRedirect {
+			return &NupfEventExposureError{
+				Kind:       NupfEventExposureErrorRedirect,
+				StatusCode: response.StatusCode,
+				Operation:  operation,
 			}
-		case NupfEventExposure.DeleteSubscriptionError:
-			classified.Kind = nupfErrorKindFromDeleteStatus(apiError.ErrorStatus)
-			if model.ProblemDetails.Status != 0 {
-				classified.ProblemDetails = &model.ProblemDetails
-			}
-		default:
-			classified.Kind = NupfEventExposureErrorTransport
 		}
-		return classified
+		if response.StatusCode != 0 {
+			return classifyNupfHTTPStatus(operation, response.StatusCode, body)
+		}
 	}
-	return &NupfEventExposureError{Kind: NupfEventExposureErrorTransport, Operation: operation}
+	_ = err
+	return nupfTransportError(operation)
 }
 
-func nupfErrorKindFromCreateStatus(status int) NupfEventExposureErrorKind {
-	if status == http.StatusTemporaryRedirect || status == http.StatusPermanentRedirect {
-		return NupfEventExposureErrorRedirect
+func classifyNupfHTTPStatus(operation string, status int, body []byte) error {
+	classified := &NupfEventExposureError{
+		Kind:       NupfEventExposureErrorUpstreamProblem,
+		StatusCode: status,
+		Operation:  operation,
 	}
-	return NupfEventExposureErrorUpstreamProblem
+	var problem models.ProblemDetails
+	if len(body) != 0 && json.Unmarshal(body, &problem) == nil && problem.Status != 0 {
+		classified.ProblemDetails = &problem
+	}
+	if status == http.StatusTemporaryRedirect || status == http.StatusPermanentRedirect {
+		classified.Kind = NupfEventExposureErrorRedirect
+	}
+	return classified
 }
 
-func nupfErrorKindFromDeleteStatus(status int) NupfEventExposureErrorKind {
-	if status == http.StatusTemporaryRedirect || status == http.StatusPermanentRedirect {
-		return NupfEventExposureErrorRedirect
+func malformedNupfSuccess(operation string, status int) error {
+	return &NupfEventExposureError{
+		Kind:       NupfEventExposureErrorMalformedSuccess,
+		StatusCode: status,
+		Operation:  operation,
 	}
-	return NupfEventExposureErrorUpstreamProblem
+}
+
+func nupfTransportError(operation string) error {
+	return &NupfEventExposureError{
+		Kind:      NupfEventExposureErrorTransport,
+		Operation: operation,
+	}
 }
 
 func validateNupfCreateSuccess(
 	target smf_context.EventExposureTarget,
 	requestURI string,
-	response *NupfEventExposure.CreateSubscriptionResponse,
+	location string,
+	response nupf.CreatedEventSubscription,
 ) (smf_context.NupfCreateResult, error) {
-	if response == nil {
-		return smf_context.NupfCreateResult{}, errors.New("missing response")
-	}
-	subscriptionID := response.UpfCreatedEventSubscription.SubscriptionId
-	if subscriptionID == "" || response.Location == "" {
+	if response.SubscriptionID == "" || location == "" {
 		return smf_context.NupfCreateResult{}, errors.New("missing subscription linkage")
 	}
 
-	resolvedLocation, err := resolveNupfLocation(requestURI, response.Location)
+	resolvedLocation, err := resolveNupfLocation(requestURI, location)
 	if err != nil {
 		return smf_context.NupfCreateResult{}, err
 	}
-	if locationErr := validateNupfLocation(target, resolvedLocation, subscriptionID); locationErr != nil {
-		return smf_context.NupfCreateResult{}, locationErr
+	if err = validateNupfLocation(target, resolvedLocation, response.SubscriptionID); err != nil {
+		return smf_context.NupfCreateResult{}, err
 	}
 
 	return smf_context.NupfCreateResult{
-		SubscriptionID:    subscriptionID,
+		SubscriptionID:    response.SubscriptionID,
 		ValidatedLocation: resolvedLocation.String(),
 		CreateRequestURI:  requestURI,
-		Response:          response.UpfCreatedEventSubscription,
+		Response:          response,
 		StatusCode:        http.StatusCreated,
 	}, nil
 }

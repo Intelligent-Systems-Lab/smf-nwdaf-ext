@@ -7,6 +7,7 @@ package factory
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path"
@@ -89,25 +90,31 @@ func (i *Info) validate() (bool, error) {
 }
 
 type Configuration struct {
-	SmfName              string               `yaml:"smfName" valid:"type(string),required"`
-	NfInstanceId         string               `yaml:"nfInstanceId,omitempty" valid:"optional,uuidv4"`
-	Sbi                  *Sbi                 `yaml:"sbi" valid:"required"`
-	Metrics              *Metrics             `yaml:"metrics,omitempty" valid:"optional"`
-	PFCP                 *PFCP                `yaml:"pfcp" valid:"required"`
-	NrfUri               string               `yaml:"nrfUri" valid:"url,required"`
-	NrfCertPem           string               `yaml:"nrfCertPem,omitempty" valid:"optional"`
-	UserPlaneInformation UserPlaneInformation `yaml:"userplaneInformation" valid:"required"`
-	ServiceNameList      []string             `yaml:"serviceNameList" valid:"required"`
-	SNssaiInfo           []*SnssaiInfoItem    `yaml:"snssaiInfos" valid:"required"`
-	ULCL                 bool                 `yaml:"ulcl" valid:"type(bool),optional"`
-	PLMNList             []PlmnID             `yaml:"plmnList"  valid:"optional"`
-	Locality             string               `yaml:"locality" valid:"type(string),optional"`
-	UrrPeriod            uint16               `yaml:"urrPeriod,omitempty" valid:"optional"`
-	UrrThreshold         uint64               `yaml:"urrThreshold,omitempty" valid:"optional"`
-	T3591                *TimerValue          `yaml:"t3591" valid:"required"`
-	T3592                *TimerValue          `yaml:"t3592" valid:"required"`
-	NwInstFqdnEncoding   bool                 `yaml:"nwInstFqdnEncoding" valid:"type(bool),optional"`
-	RequestedUnit        int32                `yaml:"requestedUnit,omitempty" valid:"optional"`
+	SmfName                string               `yaml:"smfName" valid:"type(string),required"`
+	NfInstanceId           string               `yaml:"nfInstanceId,omitempty" valid:"optional,uuidv4"`
+	Sbi                    *Sbi                 `yaml:"sbi" valid:"required"`
+	Metrics                *Metrics             `yaml:"metrics,omitempty" valid:"optional"`
+	PFCP                   *PFCP                `yaml:"pfcp" valid:"required"`
+	NrfRegistrationEnabled *bool                `yaml:"nrfRegistrationEnabled,omitempty" valid:"optional"`
+	NrfUri                 string               `yaml:"nrfUri" valid:"url,required"`
+	NrfCertPem             string               `yaml:"nrfCertPem,omitempty" valid:"optional"`
+	UserPlaneInformation   UserPlaneInformation `yaml:"userplaneInformation" valid:"required"`
+	ServiceNameList        []string             `yaml:"serviceNameList" valid:"required"`
+	SNssaiInfo             []*SnssaiInfoItem    `yaml:"snssaiInfos" valid:"required"`
+	ULCL                   bool                 `yaml:"ulcl" valid:"type(bool),optional"`
+	PLMNList               []PlmnID             `yaml:"plmnList"  valid:"optional"`
+	Locality               string               `yaml:"locality" valid:"type(string),optional"`
+	UrrPeriod              uint16               `yaml:"urrPeriod,omitempty" valid:"optional"`
+	UrrThreshold           uint64               `yaml:"urrThreshold,omitempty" valid:"optional"`
+	T3591                  *TimerValue          `yaml:"t3591" valid:"required"`
+	T3592                  *TimerValue          `yaml:"t3592" valid:"required"`
+	NwInstFqdnEncoding     bool                 `yaml:"nwInstFqdnEncoding" valid:"type(bool),optional"`
+	RequestedUnit          int32                `yaml:"requestedUnit,omitempty" valid:"optional"`
+	EventExposure          *EventExposureConfig `yaml:"eventExposure,omitempty" valid:"optional"`
+}
+
+func (c *Configuration) NrfRegistrationEnabledOrDefault() bool {
+	return c == nil || c.NrfRegistrationEnabled == nil || *c.NrfRegistrationEnabled
 }
 
 type Logger struct {
@@ -149,6 +156,12 @@ func (c *Configuration) validate() (bool, error) {
 
 	if userPlaneInformation := &c.UserPlaneInformation; userPlaneInformation != nil {
 		if result, err := userPlaneInformation.validate(); err != nil {
+			return result, err
+		}
+	}
+
+	if c.EventExposure != nil {
+		if result, err := c.EventExposure.validate(); err != nil {
 			return result, err
 		}
 	}
@@ -543,6 +556,72 @@ func (r *RoutingConfig) Validate() (bool, error) {
 type UserPlaneInformation struct {
 	UPNodes map[string]*UPNode `json:"upNodes" yaml:"upNodes" valid:"required"`
 	Links   []*UPLink          `json:"links" yaml:"links" valid:"required"`
+}
+
+type EventExposureConfig struct {
+	StaticSessionResolution *StaticSessionResolutionConfig `yaml:"staticSessionResolution,omitempty" valid:"optional"`
+}
+
+func (c *EventExposureConfig) validate() (bool, error) {
+	if c.StaticSessionResolution != nil {
+		if result, err := c.StaticSessionResolution.validate(); err != nil {
+			return result, err
+		}
+	}
+	return govalidator.ValidateStruct(c)
+}
+
+type StaticSessionResolutionConfig struct {
+	Enabled  bool                   `yaml:"enabled" valid:"type(bool),optional"`
+	Sessions []StaticSessionMapping `yaml:"sessions,omitempty" valid:"optional"`
+}
+
+func (c *StaticSessionResolutionConfig) validate() (bool, error) {
+	if c.Enabled && len(c.Sessions) == 0 {
+		return false, errors.New("eventExposure.staticSessionResolution.sessions is required when enabled")
+	}
+
+	seen := make(map[string]struct{}, len(c.Sessions))
+	for i := range c.Sessions {
+		mapping := &c.Sessions[i]
+		if mapping.Supi == "" {
+			return false, fmt.Errorf("eventExposure.staticSessionResolution.sessions[%d].supi is required", i)
+		}
+		if _, exists := seen[mapping.Supi]; exists {
+			return false, fmt.Errorf(
+				"eventExposure.staticSessionResolution.sessions[%d].supi is duplicated", i)
+		}
+		seen[mapping.Supi] = struct{}{}
+
+		ip := net.ParseIP(mapping.UEIPv4)
+		if ip == nil || ip.To4() == nil {
+			return false, fmt.Errorf(
+				"eventExposure.staticSessionResolution.sessions[%d].ueIPv4 must be an IPv4 address", i)
+		}
+		mapping.UEIPv4 = ip.To4().String()
+
+		normalized, err := normalizeNupfEeApiRoot(mapping.NupfEeApiRoot)
+		if err != nil {
+			return false, fmt.Errorf(
+				"eventExposure.staticSessionResolution.sessions[%d].nupfEeApiRoot: %w", i, err)
+		}
+		mapping.NupfEeApiRoot = normalized
+		if mapping.PDUSessionID != nil &&
+			(*mapping.PDUSessionID < 0 || *mapping.PDUSessionID > 255) {
+			return false, fmt.Errorf(
+				"eventExposure.staticSessionResolution.sessions[%d].pduSessionId is out of range", i)
+		}
+	}
+	return govalidator.ValidateStruct(c)
+}
+
+type StaticSessionMapping struct {
+	Supi          string `yaml:"supi" valid:"required"`
+	UEIPv4        string `yaml:"ueIPv4" valid:"required"`
+	NupfEeApiRoot string `yaml:"nupfEeApiRoot" valid:"required"`
+	UPFName       string `yaml:"upfName,omitempty" valid:"optional"`
+	Dnn           string `yaml:"dnn,omitempty" valid:"optional"`
+	PDUSessionID  *int32 `yaml:"pduSessionId,omitempty" valid:"optional"`
 }
 
 func (u *UserPlaneInformation) validate() (bool, error) {

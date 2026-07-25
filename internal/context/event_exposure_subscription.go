@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/free5gc/openapi/models"
+	"github.com/free5gc/smf/internal/compat/nupf"
 )
 
 var ErrEventExposureSubscriptionIDCollision = errors.New("event exposure subscription id collision")
@@ -32,21 +33,21 @@ type NupfCreateResult struct {
 	SubscriptionID    string
 	ValidatedLocation string
 	CreateRequestURI  string
-	Response          models.UpfCreatedEventSubscription
+	Response          nupf.CreatedEventSubscription
 	StatusCode        int
 }
 
 type EventExposureSubscription struct {
-	ID                    string
-	Supi                  string
-	Selectors             EventExposureSelectors
-	NotifID               string
-	NotifURI              string
-	BundledEventNotifyURI string
-	MeasurementTypes      []models.UpfMeasurementType
-	ReportingPeriod       int32
-	Granularity           models.UpfGranularityOfMeasurement
-	CreatedAt             time.Time
+	ID               string
+	Supi             string
+	Selectors        EventExposureSelectors
+	NFID             string
+	NotifID          string
+	NotifURI         string
+	MeasurementTypes []nupf.MeasurementType
+	ReportingPeriod  int32
+	Granularity      nupf.GranularityOfMeasurement
+	CreatedAt        time.Time
 
 	Target             EventExposureTarget
 	NupfSubscriptionID string
@@ -100,7 +101,7 @@ func (r *EventExposureRepository) ClaimDelete(id string) (EventExposureSubscript
 
 func cloneEventExposureSubscription(subscription EventExposureSubscription) EventExposureSubscription {
 	subscription.Selectors = cloneEventExposureSelectors(subscription.Selectors)
-	subscription.MeasurementTypes = append([]models.UpfMeasurementType(nil), subscription.MeasurementTypes...)
+	subscription.MeasurementTypes = append([]nupf.MeasurementType(nil), subscription.MeasurementTypes...)
 	subscription.Target = cloneEventExposureTarget(subscription.Target)
 	return subscription
 }
