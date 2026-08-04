@@ -184,7 +184,36 @@ func TestEventExposureResolverCopiesSnapshotValues(t *testing.T) {
 	}
 }
 
+func TestEventExposureResolverEvaluatesRequestedTAIAgainstPduSessionLocation(t *testing.T) {
+	resetEventExposureResolverState(t)
+	upf := testEventExposureUPF("http://upf.example.com/api")
+	smfContext.UserPlaneInformation = &UserPlaneInformation{UPFs: map[string]*UPNode{"upf": upf}}
+	smContext := newEventExposureSMContext(t, "imsi-001010000000001", 1, Active, upf)
+	smContext.UeLocation = &models.UserLocation{NrLocation: &models.NrLocation{Tai: &models.Tai{
+		PlmnId: &models.PlmnId{Mcc: "466", Mnc: "92"}, Tac: "000001",
+	}}}
+	area := &models.NetworkAreaInfo{Tais: []models.Tai{{
+		PlmnId: &models.PlmnId{Mcc: "466", Mnc: "92"}, Tac: "000002",
+	}}}
+	target, err := NewEventExposureTargetResolver().ResolveEventExposureTarget(
+		stdctx.Background(), smContext.Supi, EventExposureSelectors{NetworkArea: area})
+	if err != nil {
+		t.Fatalf("ResolveEventExposureTarget failed: %v", err)
+	}
+	if target.InRequestedArea {
+		t.Fatal("target must wait while the UE is outside the requested TAI")
+	}
+	area.Tais[0].Tac = "000001"
+	target, err = NewEventExposureTargetResolver().ResolveEventExposureTarget(
+		stdctx.Background(), smContext.Supi, EventExposureSelectors{NetworkArea: area})
+	if err != nil || !target.InRequestedArea {
+		t.Fatalf("expected target inside requested TAI: target=%+v err=%v", target, err)
+	}
+}
+
 func TestStaticEventExposureResolverUsesConfiguredSession(t *testing.T) {
+	const expectedDNN = "internet"
+
 	pduSessionID := int32(7)
 	sourceIP := net.ParseIP("192.0.2.7").To4()
 	resolver, err := NewStaticEventExposureTargetResolver([]StaticEventExposureSession{
@@ -193,7 +222,7 @@ func TestStaticEventExposureResolverUsesConfiguredSession(t *testing.T) {
 			UEIPAddress:  sourceIP,
 			NupfAPIRoot:  "http://127.0.0.8:8088",
 			UPFName:      "replay-upf",
-			Dnn:          "internet",
+			Dnn:          expectedDNN,
 			PDUSessionID: &pduSessionID,
 		},
 	})
@@ -207,7 +236,7 @@ func TestStaticEventExposureResolverUsesConfiguredSession(t *testing.T) {
 		stdctx.Background(),
 		"imsi-001010000000007",
 		EventExposureSelectors{
-			Dnn:          stringPtr("internet"),
+			Dnn:          stringPtr(expectedDNN),
 			PDUSessionID: int32Ptr(7),
 		},
 	)
@@ -217,7 +246,7 @@ func TestStaticEventExposureResolverUsesConfiguredSession(t *testing.T) {
 	if target.APIroot != "http://127.0.0.8:8088" ||
 		target.ServiceBaseURL != "http://127.0.0.8:8088/nupf-ee/v1" ||
 		target.UPFName != "replay-upf" ||
-		target.Dnn != "internet" ||
+		target.Dnn != expectedDNN ||
 		target.PDUSessionID != 7 ||
 		!target.UEIPAddress.Equal(net.ParseIP("192.0.2.7")) {
 		t.Fatalf("unexpected static target: %+v", target)

@@ -7,12 +7,40 @@ import (
 	"net"
 	"testing"
 
+	"github.com/free5gc/openapi/models"
 	nupfcompat "github.com/free5gc/smf/internal/compat/nupf"
 	smf_context "github.com/free5gc/smf/internal/context"
 	"github.com/free5gc/smf/internal/logger"
 	"github.com/free5gc/smf/internal/sbi/consumer"
 	"github.com/free5gc/smf/pkg/factory"
 )
+
+func TestEventExposureOutsideRequestedAreaCreatesWaitingResource(t *testing.T) {
+	repository := smf_context.NewEventExposureRepository()
+	nupf := &fakeEventExposureConsumer{}
+	target := validEventExposureTarget()
+	target.InRequestedArea = false
+	processor := newTestEventExposureProcessor(t, EventExposureDependencies{
+		Repository: repository, Resolver: fakeEventExposureResolver{target: target},
+		NupfConsumer: nupf, UUIDGenerator: &fixedUUIDGenerator{ids: []string{"sub-waiting"}},
+	})
+	request := validEventExposureCreateRequest()
+	request.Selectors.NetworkArea = &models.NetworkAreaInfo{Tais: []models.Tai{{
+		PlmnId: &models.PlmnId{Mcc: "466", Mnc: "92"}, Tac: "000002",
+	}}}
+	result, problem := processor.CreateEventExposureSubscription(context.Background(), request)
+	if problem != nil {
+		t.Fatalf("unexpected problem: %+v", problem)
+	}
+	if result.Subscription.ID != "sub-waiting" || result.Subscription.NupfSubscriptionID != "" ||
+		nupf.createCalls != 0 {
+		t.Fatalf("unexpected waiting resource: %+v createCalls=%d", result.Subscription, nupf.createCalls)
+	}
+	if problem = processor.DeleteEventExposureSubscription(context.Background(), "sub-waiting"); problem != nil ||
+		nupf.deleteCalls != 0 {
+		t.Fatalf("waiting delete problem=%+v deleteCalls=%d", problem, nupf.deleteCalls)
+	}
+}
 
 func TestEventExposureCreateSuccessStoresStateAndMapsNupfRequest(t *testing.T) {
 	repository := smf_context.NewEventExposureRepository()

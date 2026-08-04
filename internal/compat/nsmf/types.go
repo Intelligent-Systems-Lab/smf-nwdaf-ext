@@ -14,14 +14,18 @@ type Event string
 const EventUPFEvent Event = "UPF_EVENT"
 
 type EventSubscription struct {
-	Event     Event        `json:"event"`
-	UPFEvents []nupf.Event `json:"upfEvents,omitempty"`
+	Event       Event                   `json:"event"`
+	NetworkArea *models.NetworkAreaInfo `json:"networkArea,omitempty"`
+	UPFEvents   []nupf.Event            `json:"upfEvents,omitempty"`
 }
 
 type EventExposure struct {
 	SUPI        string                                    `json:"supi,omitempty"`
 	AnyUEInd    bool                                      `json:"anyUeInd,omitempty"`
 	GroupID     string                                    `json:"groupId,omitempty"`
+	PduSeID     int32                                     `json:"pduSeId,omitempty"`
+	Dnn         string                                    `json:"dnn,omitempty"`
+	Snssai      *models.Snssai                            `json:"snssai,omitempty"`
 	NFID        string                                    `json:"nfId,omitempty"`
 	SubID       string                                    `json:"subId,omitempty"`
 	NotifID     string                                    `json:"notifId"`

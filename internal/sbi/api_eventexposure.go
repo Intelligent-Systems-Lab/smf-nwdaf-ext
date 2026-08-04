@@ -101,7 +101,8 @@ func (s *Server) HTTPReplaceIndividualSubcription(c *gin.Context) {
 
 func eventExposureResponseBody(subscription smf_context.EventExposureSubscription) nsmf.EventExposure {
 	eventSubscription := nsmf.EventSubscription{
-		Event: nsmf.EventUPFEvent,
+		Event:       nsmf.EventUPFEvent,
+		NetworkArea: subscription.Selectors.NetworkArea,
 		UPFEvents: []nupf.Event{
 			{
 				Type:                     nupf.EventTypeUserDataUsageMeasures,
@@ -112,6 +113,9 @@ func eventExposureResponseBody(subscription smf_context.EventExposureSubscriptio
 	}
 	return nsmf.EventExposure{
 		SUPI:        subscription.Supi,
+		PduSeID:     subscription.Target.PDUSessionID,
+		Dnn:         subscription.Target.Dnn,
+		Snssai:      subscription.Target.Snssai,
 		NFID:        subscription.NFID,
 		SubID:       subscription.ID,
 		NotifID:     subscription.NotifID,

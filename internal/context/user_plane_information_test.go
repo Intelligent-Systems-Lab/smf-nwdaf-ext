@@ -283,11 +283,102 @@ func TestSelectUPFAndAllocUEIP(t *testing.T) {
 				Sst: 1,
 				Sd:  "112232",
 			},
+			Tai: &models.Tai{PlmnId: &models.PlmnId{Mcc: "466", Mnc: "92"}, Tac: "000001"},
 		})
 
 		require.Contains(t, expectedIPPool, allocatedIP)
 		userplaneInformation.ReleaseUEIP(upf, allocatedIP, false)
 	}
+}
+
+func TestSelectUPFAndAllocUEIPUsesCurrentTAIToChooseUPFServiceArea(t *testing.T) {
+	plmn := &models.PlmnId{Mcc: "466", Mnc: "92"}
+	snssai := &models.Snssai{Sst: 1, Sd: "010203"}
+	upfNode := func(nodeID, pool, tac string) *factory.UPNode {
+		return &factory.UPNode{
+			Type:   "UPF",
+			NodeID: nodeID,
+			TAIs:   []models.Tai{{PlmnId: plmn, Tac: tac}},
+			SNssaiInfos: []*factory.SnssaiUpfInfoItem{{
+				SNssai: snssai,
+				DnnUpfInfoList: []*factory.DnnUpfInfoItem{{
+					Dnn:   "internet",
+					Pools: []*factory.UEIPPool{{Cidr: pool}},
+				}},
+			}},
+		}
+	}
+	upiConfig := &factory.UserPlaneInformation{
+		UPNodes: map[string]*factory.UPNode{
+			"gNB-A": {Type: "AN", ANIP: "192.0.2.1"},
+			"gNB-B": {Type: "AN", ANIP: "192.0.2.2"},
+			"UPF-A": upfNode("198.51.100.1", "10.60.0.0/24", "000001"),
+			"UPF-B": upfNode("198.51.100.2", "10.61.0.0/24", "000002"),
+		},
+		Links: []*factory.UPLink{{A: "gNB-A", B: "UPF-A"}, {A: "gNB-B", B: "UPF-B"}},
+	}
+	userplaneInformation, err := smf_context.NewUserPlaneInformation(upiConfig)
+	require.NoError(t, err)
+	for _, upf := range userplaneInformation.UPFs {
+		upf.UPF.AssociationContext = context.Background()
+	}
+	selection := func(tac string) *smf_context.UPFSelectionParams {
+		return &smf_context.UPFSelectionParams{
+			Dnn:    "internet",
+			SNssai: &smf_context.SNssai{Sst: 1, Sd: "010203"},
+			Tai:    &models.Tai{PlmnId: plmn, Tac: tac},
+		}
+	}
+
+	upfA, addressA, _ := userplaneInformation.SelectUPFAndAllocUEIP(selection("000001"))
+	require.Same(t, userplaneInformation.UPFs["UPF-A"], upfA)
+	_, poolA, err := net.ParseCIDR("10.60.0.0/24")
+	require.NoError(t, err)
+	require.True(t, poolA.Contains(addressA))
+
+	upfB, addressB, _ := userplaneInformation.SelectUPFAndAllocUEIP(selection("000002"))
+	require.Same(t, userplaneInformation.UPFs["UPF-B"], upfB)
+	_, poolB, err := net.ParseCIDR("10.61.0.0/24")
+	require.NoError(t, err)
+	require.True(t, poolB.Contains(addressB))
+
+	missingUPF, missingAddress, _ := userplaneInformation.SelectUPFAndAllocUEIP(&smf_context.UPFSelectionParams{
+		Dnn: "internet", SNssai: &smf_context.SNssai{Sst: 1, Sd: "010203"},
+	})
+	require.Nil(t, missingUPF)
+	require.Nil(t, missingAddress)
+
+	pathA := userplaneInformation.GetDefaultUserPlanePathByDNNAndUPF(selection("000001"), upfA)
+	require.Equal(t, smf_context.UPPath{upfA}, pathA)
+	pathB := userplaneInformation.GetDefaultUserPlanePathByDNNAndUPF(selection("000002"), upfB)
+	require.Equal(t, smf_context.UPPath{upfB}, pathB)
+
+	serialized := userplaneInformation.UpNodesToConfiguration()
+	require.Empty(t, serialized["gNB-A"].TAIs)
+	require.Equal(t, "000001", serialized["UPF-A"].TAIs[0].Tac)
+	require.Equal(t, "000002", serialized["UPF-B"].TAIs[0].Tac)
+}
+
+func TestLinksToConfigurationPreservesDisconnectedAccessPaths(t *testing.T) {
+	upiConfig := &factory.UserPlaneInformation{
+		UPNodes: map[string]*factory.UPNode{
+			"gNB-A": {Type: "AN", ANIP: "192.0.2.1"},
+			"gNB-B": {Type: "AN", ANIP: "192.0.2.2"},
+			"UPF-A": {Type: "UPF", NodeID: "198.51.100.1"},
+			"UPF-B": {Type: "UPF", NodeID: "198.51.100.2"},
+		},
+		Links: []*factory.UPLink{
+			{A: "gNB-A", B: "UPF-A"},
+			{A: "gNB-B", B: "UPF-B"},
+		},
+	}
+	userplaneInformation, err := smf_context.NewUserPlaneInformation(upiConfig)
+	require.NoError(t, err)
+
+	require.Equal(t, []*factory.UPLink{
+		{A: "gNB-A", B: "UPF-A"},
+		{A: "gNB-B", B: "UPF-B"},
+	}, userplaneInformation.LinksToConfiguration())
 }
 
 var configForIPPoolAllocate = &factory.UserPlaneInformation{

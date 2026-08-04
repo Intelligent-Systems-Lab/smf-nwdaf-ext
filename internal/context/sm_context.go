@@ -589,6 +589,7 @@ func (c *SMContext) AllocUeIP() error {
 			Sst: c.SNssai.Sst,
 			Sd:  c.SNssai.Sd,
 		},
+		Tai: currentTAI(c.UeLocation),
 	}
 
 	if len(c.DnnConfiguration.StaticIpAddress) > 0 {
@@ -683,6 +684,7 @@ func (c *SMContext) CreatePccRuleDataPath(pccRule *PCCRule,
 			Sd:  c.SNssai.Sd,
 		},
 		Dnai: targetRoute.Dnai,
+		Tai:  currentTAI(c.UeLocation),
 	}
 	createdUpPath := GetUserPlaneInformation().GetDefaultUserPlanePathByDNN(param)
 	createdDataPath := GenerateDataPath(createdUpPath)
@@ -734,6 +736,7 @@ func (c *SMContext) CreateDcPccRuleDataPathOnDcTunnel(pccRule *PCCRule,
 			Sd:  c.SNssai.Sd,
 		},
 		Dnai: targetRoute.Dnai,
+		Tai:  currentTAI(c.UeLocation),
 	}
 	createdUpPath := GetUserPlaneInformation().GetDefaultUserPlanePathByDNN(param)
 	createdDataPath := GenerateDataPath(createdUpPath)

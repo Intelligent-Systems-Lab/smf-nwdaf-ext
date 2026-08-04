@@ -1,6 +1,10 @@
 package factory
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/free5gc/openapi/models"
+)
 
 func TestNrfRegistrationEnabledOrDefault(t *testing.T) {
 	disabled := false
@@ -87,6 +91,29 @@ func TestUPNodeNupfEeApiRootValidation(t *testing.T) {
 				if tt.node.NupfEeApiRoot == nil || *tt.node.NupfEeApiRoot != tt.wantRoot {
 					t.Fatalf("root mismatch: got %v want %q", tt.node.NupfEeApiRoot, tt.wantRoot)
 				}
+			}
+		})
+	}
+}
+
+func TestUPNodeTAIValidation(t *testing.T) {
+	tai := models.Tai{PlmnId: &models.PlmnId{Mcc: "466", Mnc: "92"}, Tac: "000001"}
+	tests := []struct {
+		name      string
+		node      UPNode
+		wantError bool
+	}{
+		{name: "UPF service area", node: UPNode{Type: "UPF", TAIs: []models.Tai{tai}}},
+		{name: "AN rejected", node: UPNode{Type: "AN", TAIs: []models.Tai{tai}}, wantError: true},
+		{name: "duplicate rejected", node: UPNode{Type: "UPF", TAIs: []models.Tai{tai, tai}}, wantError: true},
+		{name: "incomplete rejected", node: UPNode{Type: "UPF", TAIs: []models.Tai{{Tac: "000001"}}}, wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.node.validate()
+			if (err != nil) != tt.wantError {
+				t.Fatalf("error mismatch: got %v wantError %v", err, tt.wantError)
 			}
 		})
 	}

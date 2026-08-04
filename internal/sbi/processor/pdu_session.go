@@ -286,6 +286,24 @@ func (p *Processor) HandlePDUSessionSMContextCreate(
 		return
 	}
 
+	// TS 23.502, clause 4.3.2.2.1 step 16c requires the serving SMF to
+	// register this PDU Session in UDM.  The consumer implementation already
+	// existed, but the normal establishment path never invoked it, leaving
+	// UDM unable to answer serving-SMF discovery for NWDAF collection.
+	if problemDetails, registrationErr := p.Consumer().UeCmRegistration(smContext); registrationErr != nil {
+		smContext.Log.Errorf("UECM SMF registration error: %v", registrationErr)
+		p.makeEstRejectResAndReleaseSMContext(c, smContext,
+			nasMessage.Cause5GSMNetworkFailure,
+			&smf_errors.NetworkFailure)
+		return
+	} else if problemDetails != nil {
+		smContext.Log.Errorf("UECM SMF registration failed: %+v", problemDetails)
+		p.makeEstRejectResAndReleaseSMContext(c, smContext,
+			nasMessage.Cause5GSMNetworkFailure,
+			&smf_errors.NetworkFailure)
+		return
+	}
+
 	// generate goroutine to handle PFCP and
 	// reply PDUSessionSMContextCreate rsp immediately
 	needUnlock = false

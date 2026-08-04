@@ -76,6 +76,7 @@ type eventExposureEventSubscriptionBody struct {
 	TransacDispInd    *json.RawMessage            `json:"transacDispInd,omitempty"`
 	TransacMetrics    *json.RawMessage            `json:"transacMetrics,omitempty"`
 	UeIpAddr          *json.RawMessage            `json:"ueIpAddr,omitempty"`
+	NetworkArea       *models.NetworkAreaInfo     `json:"networkArea,omitempty"`
 	UpfEvents         []eventExposureUPFEventBody `json:"upfEvents"`
 }
 
@@ -182,6 +183,15 @@ func validateEventExposureCreateBody(
 	}
 	if body.Snssai != nil {
 		selectors.Snssai = &models.Snssai{Sst: body.Snssai.Sst, Sd: body.Snssai.Sd}
+	}
+	if eventSub.NetworkArea != nil {
+		if len(eventSub.NetworkArea.Tais) == 0 {
+			return processor.EventExposureCreateRequest{}, malformedEventExposureProblem(
+				"/eventSubs/0/networkArea/tais", "must contain at least one TAI")
+		}
+		area := *eventSub.NetworkArea
+		area.Tais = append([]models.Tai(nil), eventSub.NetworkArea.Tais...)
+		selectors.NetworkArea = &area
 	}
 
 	return processor.EventExposureCreateRequest{

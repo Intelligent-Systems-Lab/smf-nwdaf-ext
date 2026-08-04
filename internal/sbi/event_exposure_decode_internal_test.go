@@ -38,6 +38,20 @@ func TestDecodeEventExposureCreateRequestAcceptsPyAnLFRelease18Shape(t *testing.
 	}
 }
 
+func TestDecodeEventExposureCreateRequestPreservesNetworkAreaTAIs(t *testing.T) {
+	body := validEventExposureJSONWithEventPatch(
+		`"networkArea":{"tais":[{"plmnId":{"mcc":"466","mnc":"92"},"tac":"000001"}]},`,
+	)
+	request, problem := decodeEventExposureCreateRequest(strings.NewReader(body))
+	if problem != nil {
+		t.Fatalf("unexpected problem: %+v", problem)
+	}
+	if request.Selectors.NetworkArea == nil || len(request.Selectors.NetworkArea.Tais) != 1 ||
+		request.Selectors.NetworkArea.Tais[0].Tac != "000001" {
+		t.Fatalf("network area was not preserved: %+v", request.Selectors.NetworkArea)
+	}
+}
+
 func TestDecodeEventExposureCreateRequestDnnPresence(t *testing.T) {
 	tests := []struct {
 		name       string

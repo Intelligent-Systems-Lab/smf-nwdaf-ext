@@ -96,6 +96,7 @@ type UPFSelectionParams struct {
 	SNssai     *SNssai
 	Dnai       string
 	PDUAddress net.IP
+	Tai        *models.Tai
 }
 
 // UPFInterfaceInfo store the UPF interface information
@@ -196,6 +197,10 @@ func (upfSelectionParams *UPFSelectionParams) String() string {
 	pduAddress := upfSelectionParams.PDUAddress
 	if pduAddress != nil {
 		str += fmt.Sprintf("PDUAddress: %s\n", pduAddress)
+	}
+
+	if tai := upfSelectionParams.Tai; tai != nil && tai.PlmnId != nil {
+		str += fmt.Sprintf("TAI: %s-%s-%s\n", tai.PlmnId.Mcc, tai.PlmnId.Mnc, tai.Tac)
 	}
 
 	return str

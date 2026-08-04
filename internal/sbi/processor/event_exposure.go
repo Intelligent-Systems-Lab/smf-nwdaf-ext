@@ -46,14 +46,17 @@ func (p *Processor) CreateEventExposureSubscription(
 		return EventExposureCreateResult{}, problemFromResolverError(err)
 	}
 
-	nupfRequest := buildNupfCreateEventSubscriptionRequest(p.Context().NfInstanceID, target, request)
-	nupfConsumer := p.nupfEventExposureConsumer()
-	if nupfConsumer == nil {
-		return EventExposureCreateResult{}, eventExposureInternalProblem()
-	}
-	nupfResult, err := nupfConsumer.CreateSubscription(ctx, target, nupfRequest)
-	if err != nil {
-		return EventExposureCreateResult{}, eventExposureBadGatewayProblem()
+	var nupfResult smf_context.NupfCreateResult
+	if request.Selectors.NetworkArea == nil || target.InRequestedArea {
+		nupfRequest := buildNupfCreateEventSubscriptionRequest(p.Context().NfInstanceID, target, request)
+		nupfConsumer := p.nupfEventExposureConsumer()
+		if nupfConsumer == nil {
+			return EventExposureCreateResult{}, eventExposureInternalProblem()
+		}
+		nupfResult, err = nupfConsumer.CreateSubscription(ctx, target, nupfRequest)
+		if err != nil {
+			return EventExposureCreateResult{}, eventExposureBadGatewayProblem()
+		}
 	}
 
 	subscription := smf_context.EventExposureSubscription{
@@ -97,6 +100,9 @@ func (p *Processor) DeleteEventExposureSubscription(ctx context.Context, subscri
 	nupfConsumer := p.nupfEventExposureConsumer()
 	if nupfConsumer == nil {
 		logger.SBILog.Warn("Event Exposure downstream delete did not start; local cleanup completed")
+		return nil
+	}
+	if subscription.NupfSubscriptionID == "" {
 		return nil
 	}
 	if err := nupfConsumer.DeleteSubscription(ctx, subscription.Target, subscription.NupfSubscriptionID); err != nil {

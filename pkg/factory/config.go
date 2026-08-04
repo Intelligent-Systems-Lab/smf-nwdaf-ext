@@ -647,6 +647,7 @@ type UPNode struct {
 	NodeID               string                  `json:"nodeID" yaml:"nodeID" valid:"host,optional"`
 	Addr                 string                  `json:"addr" yaml:"addr" valid:"host,optional"`
 	ANIP                 string                  `json:"anIP" yaml:"anIP" valid:"host,optional"`
+	TAIs                 []models.Tai            `json:"tais,omitempty" yaml:"tais,omitempty" valid:"optional"`
 	Dnn                  string                  `json:"dnn" yaml:"dnn" valid:"type(string),minstringlength(1),optional"`
 	NupfEeApiRoot        *string                 `json:"nupfEeApiRoot" yaml:"nupfEeApiRoot" valid:"optional"`
 	SNssaiInfos          []*SnssaiUpfInfoItem    `json:"sNssaiUpfInfos" yaml:"sNssaiUpfInfos,omitempty" valid:"optional"`
@@ -667,6 +668,20 @@ func (u *UPNode) validate() (bool, error) {
 			return false, err
 		}
 		u.NupfEeApiRoot = &normalized
+	}
+	if len(u.TAIs) > 0 && u.Type != "UPF" {
+		return false, errors.New("tais is only valid on UPF nodes")
+	}
+	seenTAIs := make(map[string]struct{}, len(u.TAIs))
+	for index, tai := range u.TAIs {
+		if tai.PlmnId == nil || tai.PlmnId.Mcc == "" || tai.PlmnId.Mnc == "" || tai.Tac == "" {
+			return false, fmt.Errorf("tais[%d] requires plmnId.mcc, plmnId.mnc, and tac", index)
+		}
+		key := tai.PlmnId.Mcc + "-" + tai.PlmnId.Mnc + "-" + tai.Tac
+		if _, exists := seenTAIs[key]; exists {
+			return false, fmt.Errorf("tais[%d] duplicates %s", index, key)
+		}
+		seenTAIs[key] = struct{}{}
 	}
 
 	for _, snssaiInfo := range u.SNssaiInfos {

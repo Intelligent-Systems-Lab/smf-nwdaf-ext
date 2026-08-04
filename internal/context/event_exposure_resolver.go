@@ -76,18 +76,22 @@ func (r *StaticEventExposureTargetResolver) ResolveEventExposureTarget(
 	if selectors.Snssai != nil {
 		return EventExposureTarget{}, ErrEventExposureNoMatchingSession
 	}
+	if selectors.NetworkArea != nil {
+		return EventExposureTarget{}, ErrEventExposureNoMatchingSession
+	}
 
 	pduSessionID := int32(0)
 	if session.PDUSessionID != nil {
 		pduSessionID = *session.PDUSessionID
 	}
 	return EventExposureTarget{
-		UPFName:        session.UPFName,
-		APIroot:        session.NupfAPIRoot,
-		ServiceBaseURL: strings.TrimRight(session.NupfAPIRoot, "/") + "/nupf-ee/v1",
-		UEIPAddress:    append(net.IP(nil), session.UEIPAddress...),
-		Dnn:            session.Dnn,
-		PDUSessionID:   pduSessionID,
+		UPFName:         session.UPFName,
+		APIroot:         session.NupfAPIRoot,
+		ServiceBaseURL:  strings.TrimRight(session.NupfAPIRoot, "/") + "/nupf-ee/v1",
+		UEIPAddress:     append(net.IP(nil), session.UEIPAddress...),
+		Dnn:             session.Dnn,
+		PDUSessionID:    pduSessionID,
+		InRequestedArea: true,
 	}, nil
 }
 
@@ -140,11 +144,13 @@ func (r *EventExposureTargetResolver) ResolveEventExposureTarget(
 }
 
 type eventExposureSessionSnapshot struct {
-	selectedUPF  *UPNode
-	ueIP         net.IP
-	dnn          string
-	snssai       *modelsSnssai
-	pduSessionID int32
+	selectedUPF   *UPNode
+	ueIP          net.IP
+	dnn           string
+	snssai        *modelsSnssai
+	pduSessionID  int32
+	ueTai         *models.Tai
+	requestedArea *models.NetworkAreaInfo
 }
 
 type modelsSnssai struct {
@@ -179,12 +185,20 @@ func snapshotEventExposureSession(
 	if smContext.SNssai != nil {
 		snssai = &modelsSnssai{sst: smContext.SNssai.Sst, sd: smContext.SNssai.Sd}
 	}
+	var ueTai *models.Tai
+	if smContext.UeLocation != nil && smContext.UeLocation.NrLocation != nil &&
+		smContext.UeLocation.NrLocation.Tai != nil {
+		value := *smContext.UeLocation.NrLocation.Tai
+		ueTai = &value
+	}
 	return eventExposureSessionSnapshot{
-		selectedUPF:  smContext.SelectedUPF,
-		ueIP:         append(net.IP(nil), smContext.PDUAddress...),
-		dnn:          smContext.Dnn,
-		snssai:       snssai,
-		pduSessionID: smContext.PDUSessionID,
+		selectedUPF:   smContext.SelectedUPF,
+		ueIP:          append(net.IP(nil), smContext.PDUAddress...),
+		dnn:           smContext.Dnn,
+		snssai:        snssai,
+		pduSessionID:  smContext.PDUSessionID,
+		ueTai:         ueTai,
+		requestedArea: selectors.NetworkArea,
 	}, true
 }
 
@@ -215,13 +229,14 @@ func resolveEventExposureUPFSnapshot(snapshot eventExposureSessionSnapshot) (Eve
 			return EventExposureTarget{}, ErrEventExposureMissingEndpoint
 		}
 		target := EventExposureTarget{
-			UPFName:        name,
-			UPFID:          upfNode.UPF.UUID(),
-			APIroot:        upfNode.NupfEeApiRoot,
-			ServiceBaseURL: upfNode.NupfEeApiRoot + "/nupf-ee/v1",
-			UEIPAddress:    append(net.IP(nil), snapshot.ueIP...),
-			Dnn:            snapshot.dnn,
-			PDUSessionID:   snapshot.pduSessionID,
+			UPFName:         name,
+			UPFID:           upfNode.UPF.UUID(),
+			APIroot:         upfNode.NupfEeApiRoot,
+			ServiceBaseURL:  upfNode.NupfEeApiRoot + "/nupf-ee/v1",
+			UEIPAddress:     append(net.IP(nil), snapshot.ueIP...),
+			Dnn:             snapshot.dnn,
+			PDUSessionID:    snapshot.pduSessionID,
+			InRequestedArea: eventExposureTaiInArea(snapshot.ueTai, snapshot.requestedArea),
 		}
 		if snapshot.snssai != nil {
 			target.Snssai = &models.Snssai{Sst: snapshot.snssai.sst, Sd: snapshot.snssai.sd}
@@ -230,4 +245,21 @@ func resolveEventExposureUPFSnapshot(snapshot eventExposureSessionSnapshot) (Eve
 	}
 
 	return EventExposureTarget{}, ErrEventExposureMissingUPF
+}
+
+func eventExposureTaiInArea(tai *models.Tai, area *models.NetworkAreaInfo) bool {
+	if area == nil {
+		return true
+	}
+	if tai == nil || tai.PlmnId == nil {
+		return false
+	}
+	for _, requested := range area.Tais {
+		if requested.PlmnId != nil && requested.PlmnId.Mcc == tai.PlmnId.Mcc &&
+			requested.PlmnId.Mnc == tai.PlmnId.Mnc && strings.EqualFold(requested.Tac, tai.Tac) &&
+			requested.Nid == tai.Nid {
+			return true
+		}
+	}
+	return false
 }

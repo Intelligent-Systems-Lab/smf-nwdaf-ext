@@ -163,6 +163,26 @@ func initDiscUDMStubNRF() {
 						},
 						ApiPrefix: "http://127.0.0.3:8000",
 					},
+					{
+						ServiceInstanceId: "1",
+						ServiceName:       "nudm-uecm",
+						Versions: []models.NfServiceVersion{
+							{
+								ApiVersionInUri: "v1",
+								ApiFullVersion:  "1.0.0",
+							},
+						},
+						Scheme:          "http",
+						NfServiceStatus: "REGISTERED",
+						IpEndPoints: []models.IpEndPoint{
+							{
+								Ipv4Address: "127.0.0.3",
+								Transport:   "TCP",
+								Port:        8000,
+							},
+						},
+						ApiPrefix: "http://127.0.0.3:8000",
+					},
 				},
 			},
 		},
@@ -174,6 +194,16 @@ func initDiscUDMStubNRF() {
 		MatchParam("requester-nf-type", "SMF").
 		Reply(http.StatusOK).
 		JSON(searchResult)
+
+	gock.New("http://127.0.0.3:8000").
+		Put("/nudm-uecm/v1/imsi-208930000007487/registrations/smf-registrations/10").
+		Reply(http.StatusCreated).
+		JSON(models.SmfRegistration{
+			SmfInstanceId: "smf-unit-testing",
+			PduSessionId:  10,
+			SingleNssai:   &models.Snssai{Sst: 1, Sd: "112232"},
+			Dnn:           "internet",
+		})
 }
 
 func initDiscPCFStubNRF() {
@@ -652,6 +682,48 @@ func TestHandlePDUSessionSMContextCreate(t *testing.T) {
 
 	err = udp.ClosePfcp()
 	require.NoError(t, err)
+}
+
+func TestRemoveSMContextFromAllNFDeregistersServingSMF(t *testing.T) {
+	openapi.InterceptH2CClient()
+	defer openapi.RestoreH2CClient()
+	defer gock.Off()
+
+	initConfig()
+	self := smf_context.GetSelf()
+	self.UDMProfile = models.NrfNfDiscoveryNfProfile{
+		NfServices: []models.NrfNfDiscoveryNfService{
+			{
+				ServiceName:     models.ServiceName_NUDM_UECM,
+				NfServiceStatus: models.NfServiceStatus_REGISTERED,
+				ApiPrefix:       "http://127.0.0.3:8000",
+			},
+		},
+	}
+
+	deregistrationMock := gock.New("http://127.0.0.3:8000").
+		Delete("/nudm-uecm/v1/imsi-208930000007487/registrations/smf-registrations/10").
+		Reply(http.StatusNoContent)
+
+	mockSmf := service.NewMockSmfAppInterface(gomock.NewController(t))
+	smfConsumer, err := consumer.NewConsumer(mockSmf)
+	require.NoError(t, err)
+	proc, err := processor.NewProcessor(mockSmf)
+	require.NoError(t, err)
+	mockSmf.EXPECT().Context().Return(self).AnyTimes()
+	mockSmf.EXPECT().Consumer().Return(smfConsumer).AnyTimes()
+
+	smContext := smf_context.NewSMContext("imsi-208930000007487", 10)
+	smContext.SmfPduSessionSmContextCreateData = &models.SmfPduSessionSmContextCreateData{
+		Supi:         "imsi-208930000007487",
+		PduSessionId: 10,
+	}
+	smContext.UeCmRegistered = true
+
+	proc.RemoveSMContextFromAllNF(smContext, false)
+
+	require.False(t, smContext.UeCmRegistered)
+	require.True(t, deregistrationMock.Done(), "expected serving-SMF deregistration request")
 }
 
 func TestHandlePDUSessionSMContextCreate_InvalidDnnSnssaiInputs(t *testing.T) {

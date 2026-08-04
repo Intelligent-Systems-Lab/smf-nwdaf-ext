@@ -30,6 +30,24 @@ func (p *Processor) RemoveSMContextFromAllNF(smContext *smf_context.SMContext, s
 		}
 	}
 
+	// A PDU Session can fail after its serving-SMF registration has already
+	// been created in UDM (for example, when PFCP establishment fails).  Do not
+	// leave that registration behind when the common rollback path removes the
+	// local SM context, otherwise UDM consumers can resolve a PDU Session that
+	// no longer exists in this SMF.
+	if smContext.UeCmRegistered {
+		problemDetails, err := p.Consumer().UeCmDeregistration(smContext)
+		if problemDetails != nil {
+			if problemDetails.Cause != CONTEXT_NOT_FOUND {
+				smContext.Log.Errorf("UECM_DeRegistration Failed Problem[%+v]", problemDetails)
+			}
+		} else if err != nil {
+			smContext.Log.Errorf("UECM_DeRegistration Error[%+v]", err)
+		} else {
+			smContext.Log.Traceln("UECM_DeRegistration successful")
+		}
+	}
+
 	// Because the amfUE who called this SMF API is being locked until the API Handler returns,
 	// sending SMContext Status Notification should run asynchronously
 	// so that this function returns immediately.

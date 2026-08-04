@@ -16,17 +16,19 @@ type EventExposureSelectors struct {
 	PDUSessionID *int32
 	Dnn          *string
 	Snssai       *models.Snssai
+	NetworkArea  *models.NetworkAreaInfo
 }
 
 type EventExposureTarget struct {
-	UPFName        string
-	UPFID          string
-	APIroot        string
-	ServiceBaseURL string
-	UEIPAddress    net.IP
-	Dnn            string
-	Snssai         *models.Snssai
-	PDUSessionID   int32
+	UPFName         string
+	UPFID           string
+	APIroot         string
+	ServiceBaseURL  string
+	UEIPAddress     net.IP
+	Dnn             string
+	Snssai          *models.Snssai
+	PDUSessionID    int32
+	InRequestedArea bool
 }
 
 type NupfCreateResult struct {
@@ -117,6 +119,11 @@ func cloneEventExposureSelectors(selectors EventExposureSelectors) EventExposure
 	}
 	if selectors.Snssai != nil {
 		selectors.Snssai = cloneModelSnssai(selectors.Snssai)
+	}
+	if selectors.NetworkArea != nil {
+		area := *selectors.NetworkArea
+		area.Tais = append([]models.Tai(nil), selectors.NetworkArea.Tais...)
+		selectors.NetworkArea = &area
 	}
 	return selectors
 }

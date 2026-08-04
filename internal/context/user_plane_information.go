@@ -7,6 +7,7 @@ import (
 	"net"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/free5gc/openapi/models"
@@ -41,6 +42,7 @@ type UPNode struct {
 	Type          UPNodeType
 	NodeID        pfcpType.NodeID
 	ANIP          net.IP
+	TAIs          []models.Tai
 	Dnn           string
 	NupfEeApiRoot string
 	Links         []*UPNode
@@ -67,6 +69,40 @@ func (u *UPNode) MatchedSelection(selection *UPFSelectionParams) bool {
 
 // UPPath represent User Plane Sequence of this path
 type UPPath []*UPNode
+
+func cloneTAIs(values []models.Tai) []models.Tai {
+	result := make([]models.Tai, 0, len(values))
+	for _, value := range values {
+		copyValue := value
+		if value.PlmnId != nil {
+			plmn := *value.PlmnId
+			copyValue.PlmnId = &plmn
+		}
+		result = append(result, copyValue)
+	}
+	return result
+}
+
+func currentTAI(location *models.UserLocation) *models.Tai {
+	if location == nil || location.NrLocation == nil || location.NrLocation.Tai == nil {
+		return nil
+	}
+	value := cloneTAIs([]models.Tai{*location.NrLocation.Tai})
+	return &value[0]
+}
+
+func taiEqual(left, right *models.Tai) bool {
+	return left != nil && right != nil && left.PlmnId != nil && right.PlmnId != nil &&
+		left.PlmnId.Mcc == right.PlmnId.Mcc && left.PlmnId.Mnc == right.PlmnId.Mnc &&
+		strings.EqualFold(left.Tac, right.Tac) && left.Nid == right.Nid
+}
+
+func taiString(tai *models.Tai) string {
+	if tai == nil || tai.PlmnId == nil {
+		return "<unknown>"
+	}
+	return tai.PlmnId.Mcc + "-" + tai.PlmnId.Mnc + "-" + tai.Tac
+}
 
 func AllocateUPFID() {
 	UPFsID := smfContext.UserPlaneInformation.UPFsID
@@ -98,6 +134,7 @@ func NewUserPlaneInformation(upTopology *factory.UserPlaneInformation) (*UserPla
 			upNode.ANIP = net.ParseIP(node.ANIP)
 			anPool[name] = upNode
 		case UPNODE_UPF:
+			upNode.TAIs = cloneTAIs(node.TAIs)
 			// ParseIp() always return 16 bytes
 			// so we can't use the length of return ip to separate IPv4 and IPv6
 			// This is just a work around
@@ -244,6 +281,7 @@ func (upi *UserPlaneInformation) UpNodesToConfiguration() map[string]*factory.UP
 		switch upNode.Type {
 		case UPNODE_UPF:
 			u.Type = "UPF"
+			u.TAIs = cloneTAIs(upNode.TAIs)
 		case UPNODE_AN:
 			u.Type = "AN"
 			u.ANIP = upNode.ANIP.String()
@@ -334,35 +372,46 @@ func (upi *UserPlaneInformation) UpNodesToConfiguration() map[string]*factory.UP
 }
 
 func (upi *UserPlaneInformation) LinksToConfiguration() []*factory.UPLink {
-	links := make([]*factory.UPLink, 0)
-	source, err := upi.selectUPPathSource()
-	if err != nil {
-		logger.InitLog.Errorf("AN Node not found\n")
-	} else {
-		visited := make(map[*UPNode]bool)
-		queue := make([]*UPNode, 0)
-		queue = append(queue, source)
-		for {
-			node := queue[0]
-			queue = queue[1:]
-			visited[node] = true
-			for _, link := range node.Links {
-				if !visited[link] {
-					queue = append(queue, link)
-					nodeIpStr := node.NodeID.ResolveNodeIdToIp().String()
-					ipStr := link.NodeID.ResolveNodeIdToIp().String()
-					linkA := upi.UPFIPToName[nodeIpStr]
-					linkB := upi.UPFIPToName[ipStr]
-					links = append(links, &factory.UPLink{
-						A: linkA,
-						B: linkB,
-					})
-				}
-			}
-			if len(queue) == 0 {
-				break
-			}
+	type edge struct {
+		a string
+		b string
+	}
+
+	// Serialize the graph itself instead of traversing from one access node.
+	// A valid multi-area topology can contain disconnected AN-to-UPF
+	// components, and AN nodes do not have PFCP NodeIDs that can be resolved
+	// through UPFIPToName.
+	edges := make(map[edge]struct{})
+	for _, node := range upi.UPNodes {
+		if node == nil || node.Name == "" {
+			continue
 		}
+		for _, peer := range node.Links {
+			if peer == nil || peer.Name == "" || peer == node {
+				continue
+			}
+			a, b := node.Name, peer.Name
+			if strings.ToLower(b) < strings.ToLower(a) {
+				a, b = b, a
+			}
+			edges[edge{a: a, b: b}] = struct{}{}
+		}
+	}
+
+	ordered := make([]edge, 0, len(edges))
+	for value := range edges {
+		ordered = append(ordered, value)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].a == ordered[j].a {
+			return ordered[i].b < ordered[j].b
+		}
+		return ordered[i].a < ordered[j].a
+	})
+
+	links := make([]*factory.UPLink, 0, len(ordered))
+	for _, value := range ordered {
+		links = append(links, &factory.UPLink{A: value.a, B: value.b})
 	}
 	return links
 }
@@ -415,6 +464,7 @@ func (upi *UserPlaneInformation) UpNodesFromConfiguration(upTopology *factory.Us
 		upNode.Type = UPNodeType(node.Type)
 		switch upNode.Type {
 		case UPNODE_UPF:
+			upNode.TAIs = cloneTAIs(node.TAIs)
 			// ParseIp() always return 16 bytes
 			// so we can't use the length of return ip to separate IPv4 and IPv6
 			// This is just a work around
@@ -714,11 +764,10 @@ func GenerateDataPath(upPath UPPath) *DataPath {
 }
 
 func (upi *UserPlaneInformation) GenerateDefaultPath(selection *UPFSelectionParams) bool {
-	var source *UPNode
 	var destinations, path []*UPNode
 	var pathExist bool
 
-	destinations = upi.selectMatchUPF(selection)
+	destinations = upi.filterUPFsByTAI(upi.selectMatchUPF(selection), selection.Tai)
 
 	if len(destinations) == 0 {
 		logger.CtxLog.Errorf("Can't find UPF with DNN[%s] S-NSSAI[sst: %d sd: %s] DNAI[%s]\n", selection.Dnn,
@@ -735,30 +784,10 @@ func (upi *UserPlaneInformation) GenerateDefaultPath(selection *UPFSelectionPara
 		logger.CtxLog.Tracef("=================================")
 	}
 
-	// Run DFS
-	for _, node := range upi.AccessNetwork {
-		visited := make(map[*UPNode]bool)
-		for _, upNode := range upi.UPNodes {
-			visited[upNode] = false
-		}
-
-		if node.Type == UPNODE_AN {
-			source = node
-			path, pathExist = getPathBetween(source, destinations[0], visited, selection)
-
-			if pathExist {
-				if path[0].Type == UPNODE_AN {
-					path = path[1:]
-				}
-				upi.DefaultUserPlanePath[selection.String()] = path
-				break
-			}
-		}
-	}
-
-	if source == nil {
-		logger.CtxLog.Errorf("There is no AN Node in config file!")
-		return false
+	destinations = upi.sortUPFListByName(destinations)
+	path, pathExist = upi.pathToUPF(selection, destinations[0])
+	if pathExist {
+		upi.DefaultUserPlanePath[selection.String()] = path
 	}
 
 	if pathExist {
@@ -775,33 +804,14 @@ func (upi *UserPlaneInformation) GenerateDefaultPath(selection *UPFSelectionPara
 }
 
 func (upi *UserPlaneInformation) GenerateDefaultPathToUPF(selection *UPFSelectionParams, destination *UPNode) bool {
-	var source *UPNode
-
-	for _, node := range upi.AccessNetwork {
-		if node.Type == UPNODE_AN {
-			source = node
-			break
-		}
-	}
-
-	if source == nil {
-		logger.CtxLog.Errorf("There is no AN Node in config file!")
+	if len(upi.filterUPFsByTAI([]*UPNode{destination}, selection.Tai)) == 0 {
+		logger.CtxLog.Errorf("UPF %s does not serve TAI %s", destination.Name, taiString(selection.Tai))
 		return false
 	}
 
-	// Run DFS
-	visited := make(map[*UPNode]bool)
-
-	for _, upNode := range upi.UPNodes {
-		visited[upNode] = false
-	}
-
-	path, pathExist := getPathBetween(source, destination, visited, selection)
+	path, pathExist := upi.pathToUPF(selection, destination)
 
 	if pathExist {
-		if path[0].Type == UPNODE_AN {
-			path = path[1:]
-		}
 		if upi.DefaultUserPlanePathToUPF[selection.String()] == nil {
 			upi.DefaultUserPlanePathToUPF[selection.String()] = make(map[string][]*UPNode)
 		}
@@ -848,7 +858,7 @@ func getPathBetween(cur *UPNode, dest *UPNode, visited map[*UPNode]bool,
 
 	for _, node := range cur.Links {
 		if !visited[node] {
-			if !node.UPF.isSupportSnssai(selectedSNssai) {
+			if node.Type == UPNODE_UPF && !node.UPF.isSupportSnssai(selectedSNssai) {
 				visited[node] = true
 				continue
 			}
@@ -887,6 +897,9 @@ func (upi *UserPlaneInformation) selectAnchorUPF(source *UPNode, selection *UPFS
 		visited[node] = true
 		for _, link := range node.Links {
 			if !visited[link] {
+				if link.Type != UPNODE_UPF {
+					continue
+				}
 				if link.MatchedSelection(selectionForIUPF) {
 					queue = append(queue, link)
 					findNewNode = true
@@ -926,23 +939,93 @@ func (upi *UserPlaneInformation) sortUPFListByName(upfList []*UPNode) []*UPNode 
 	return sortedUpList
 }
 
-func (upi *UserPlaneInformation) selectUPPathSource() (*UPNode, error) {
-	// if multiple gNBs exist, select one according to some criterion
-	for _, node := range upi.AccessNetwork {
+func (upi *UserPlaneInformation) selectUPPathSources() ([]*UPNode, error) {
+	names := make([]string, 0, len(upi.AccessNetwork))
+	for name, node := range upi.AccessNetwork {
 		if node.Type == UPNODE_AN {
-			return node, nil
+			names = append(names, name)
 		}
 	}
-	return nil, errors.New("AN Node not found")
+	sort.Strings(names)
+	if len(names) == 0 {
+		return nil, errors.New("AN Node not found")
+	}
+	sources := make([]*UPNode, 0, len(names))
+	for _, name := range names {
+		sources = append(sources, upi.AccessNetwork[name])
+	}
+	return sources, nil
+}
+
+func (upi *UserPlaneInformation) pathToUPF(
+	selection *UPFSelectionParams,
+	destination *UPNode,
+) (UPPath, bool) {
+	sources, err := upi.selectUPPathSources()
+	if err != nil {
+		logger.CtxLog.Errorf("Unable to select AN node: %v", err)
+		return nil, false
+	}
+	for _, source := range sources {
+		visited := make(map[*UPNode]bool, len(upi.UPNodes))
+		path, exists := getPathBetween(source, destination, visited, selection)
+		if !exists {
+			continue
+		}
+		if len(path) > 0 && path[0].Type == UPNODE_AN {
+			path = path[1:]
+		}
+		return path, true
+	}
+	return nil, false
+}
+
+func (upi *UserPlaneInformation) filterUPFsByTAI(upfs []*UPNode, tai *models.Tai) []*UPNode {
+	// An entirely unscoped candidate set is a legacy topology. Once an operator
+	// declares any UPF service area, only UPFs with an exact TAI match are eligible.
+	hasServiceArea := false
+	for _, upf := range upfs {
+		if upf != nil && len(upf.TAIs) > 0 {
+			hasServiceArea = true
+			break
+		}
+	}
+	if !hasServiceArea {
+		return upfs
+	}
+	if tai == nil {
+		return nil
+	}
+
+	filtered := make([]*UPNode, 0, len(upfs))
+	for _, upf := range upfs {
+		for index := range upf.TAIs {
+			if taiEqual(&upf.TAIs[index], tai) {
+				filtered = append(filtered, upf)
+				break
+			}
+		}
+	}
+	return filtered
 }
 
 // SelectUPFAndAllocUEIP will return anchor UPF, allocated UE IP and use/not use static IP
 func (upi *UserPlaneInformation) SelectUPFAndAllocUEIP(selection *UPFSelectionParams) (*UPNode, net.IP, bool) {
-	source, err := upi.selectUPPathSource()
+	sources, err := upi.selectUPPathSources()
 	if err != nil {
 		return nil, nil, false
 	}
-	UPFList := upi.selectAnchorUPF(source, selection)
+	upfSet := make(map[string]*UPNode)
+	for _, source := range sources {
+		for _, upf := range upi.selectAnchorUPF(source, selection) {
+			upfSet[upf.Name] = upf
+		}
+	}
+	UPFList := make([]*UPNode, 0, len(upfSet))
+	for _, upf := range upfSet {
+		UPFList = append(UPFList, upf)
+	}
+	UPFList = upi.filterUPFsByTAI(UPFList, selection.Tai)
 	logger.CtxLog.Debug("UPFList: ", UPFList)
 	listLength := len(UPFList)
 	if listLength == 0 {
